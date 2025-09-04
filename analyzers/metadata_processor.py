@@ -61,7 +61,7 @@ class MetadataProcessor:
                 logger.info("Identified as measures file")
                 measures = self._parse_measures_file(rows)
                 
-            elif 'TableName' in headers and 'ExplicitName' in headers:
+            elif 'TableName' in headers and 'DataType' in headers:
                 logger.info("Identified as tables file")
                 tables = self._parse_tables_file(rows)
                 
