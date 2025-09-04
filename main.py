@@ -333,8 +333,16 @@ async def process_dashboards(files: List[UploadFile] = File(...), dashboard_info
             # Process metadata
             metadata_summary = {}
             if files_data['metadata']:
-                metadata_results = await metadata_processor.analyze_metadata_files(
-                    files_data['metadata'], dashboard_id
+                # Read metadata file contents async
+                metadata_contents = []
+                for metadata_file in files_data['metadata']:
+                    file_content = await metadata_file.read()
+                    csv_content = file_content.decode('utf-8')
+                    metadata_contents.append(csv_content)
+                
+                # Process with synchronous method
+                metadata_results = metadata_processor.analyze_metadata_files(
+                    metadata_contents, dashboard_id
                 )
                 dashboard_profile.measures.extend(metadata_results.get('measures', []))
                 dashboard_profile.tables.extend(metadata_results.get('tables', []))

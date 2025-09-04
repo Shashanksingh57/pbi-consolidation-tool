@@ -30,7 +30,7 @@ class MetadataProcessor:
             'RANKX', 'TOPN', 'EARLIER', 'EARLIEST', 'HASONEVALUE', 'SELECTEDVALUE'
         }
     
-    async def parse_dax_studio_export(self, csv_content: str) -> Dict[str, Any]:
+    def parse_dax_studio_export(self, csv_content: str) -> Dict[str, Any]:
         """
         Parse DAX Studio export CSV and extract measures, tables, relationships
         """
@@ -375,9 +375,9 @@ class MetadataProcessor:
             }
         }
     
-    async def analyze_metadata_files(self, metadata_files: List, dashboard_id: str) -> Dict[str, Any]:
+    def analyze_metadata_files(self, metadata_contents: List[str], dashboard_id: str) -> Dict[str, Any]:
         """
-        Analyze multiple metadata files for a dashboard
+        Analyze multiple metadata file contents for a dashboard
         """
         try:
             all_measures = []
@@ -385,13 +385,9 @@ class MetadataProcessor:
             all_relationships = []
             all_data_sources = []
             
-            for metadata_file in metadata_files:
-                # Read file content
-                file_content = metadata_file.read()
-                csv_content = file_content.decode('utf-8')
-                
-                # Parse the CSV file
-                parsed_data = await self.parse_dax_studio_export(csv_content)
+            for i, csv_content in enumerate(metadata_contents):
+                # Parse the CSV file content
+                parsed_data = self.parse_dax_studio_export(csv_content)
                 
                 # Aggregate results
                 all_measures.extend(parsed_data.get('measures', []))
@@ -399,7 +395,7 @@ class MetadataProcessor:
                 all_relationships.extend(parsed_data.get('relationships', []))
                 all_data_sources.extend(parsed_data.get('data_sources', []))
                 
-                logger.info(f"Processed metadata file {metadata_file.filename} for {dashboard_id}")
+                logger.info(f"Processed metadata file {i+1} for {dashboard_id}")
             
             return {
                 'measures': all_measures,
