@@ -57,15 +57,15 @@ class MetadataProcessor:
             data_sources = []
             
             # Identify file type based on headers and delegate parsing
-            if '[MEASURE_NAME]' in headers and '[EXPRESSION]' in headers:
+            if 'MEASURE_NAME' in headers and 'EXPRESSION' in headers:
                 logger.info("Identified as measures file")
                 measures = self._parse_measures_file(rows)
                 
-            elif '[TableName]' in headers and '[Structure]' in headers:
+            elif 'TableName' in headers and 'ExplicitName' in headers:
                 logger.info("Identified as tables file")
                 tables = self._parse_tables_file(rows)
                 
-            elif '[FromTableName]' in headers and '[ToColumnName]' in headers:
+            elif 'FromTableName' in headers and 'ToColumnName' in headers:
                 logger.info("Identified as relationships file")
                 relationships = self._parse_relationships_file(rows)
                 
@@ -103,15 +103,15 @@ class MetadataProcessor:
             }
     
     def _parse_measures_file(self, rows: List[Dict[str, str]]) -> List[DAXMeasure]:
-        """Parse measures CSV file with headers like [MEASURE_NAME], [EXPRESSION]"""
+        """Parse measures CSV file with headers like MEASURE_NAME, EXPRESSION"""
         measures = []
         try:
             for row in rows:
-                measure_name = row.get('[MEASURE_NAME]', '').strip()
-                expression = row.get('[EXPRESSION]', '').strip()
-                table_name = row.get('[TABLE_NAME]', '').strip()
-                description = row.get('[DESCRIPTION]', '').strip()
-                format_string = row.get('[FORMAT_STRING]', '').strip()
+                measure_name = row.get('MEASURE_NAME', '').strip()
+                expression = row.get('EXPRESSION', '').strip()
+                table_name = row.get('TABLE_NAME', '').strip()
+                description = row.get('DESCRIPTION', '').strip()
+                format_string = row.get('FORMAT_STRING', '').strip()
                 
                 if measure_name and expression:
                     measure = DAXMeasure(
@@ -131,13 +131,13 @@ class MetadataProcessor:
         return measures
     
     def _parse_tables_file(self, rows: List[Dict[str, str]]) -> List[DataTable]:
-        """Parse tables CSV file with headers like [TableName], [Structure]"""
+        """Parse tables CSV file with headers like TableName, ExplicitName"""
         tables = []
         try:
             for row in rows:
-                table_name = row.get('[TableName]', '').strip()
-                structure = row.get('[Structure]', '').strip()
-                row_count_str = row.get('[RowCount]', '0').strip()
+                table_name = row.get('TableName', '').strip()
+                explicit_name = row.get('ExplicitName', '').strip()
+                row_count_str = row.get('RowCount', '0').strip()
                 
                 # Parse row count
                 try:
@@ -145,14 +145,13 @@ class MetadataProcessor:
                 except (ValueError, TypeError):
                     row_count = None
                 
-                # Parse columns from structure if available
+                # Parse columns from explicit_name or other available data
                 columns = []
                 column_count = 0
-                if structure:
-                    # Structure typically contains column information
-                    # For now, we'll extract basic info, but this might need adjustment
-                    # based on the actual DAX Studio export format
-                    columns = [col.strip() for col in structure.split(',') if col.strip()]
+                if explicit_name:
+                    # ExplicitName typically contains table information
+                    # For now, we'll use the explicit name as a single column reference
+                    columns = [explicit_name] if explicit_name != table_name else []
                     column_count = len(columns)
                 
                 if table_name:
@@ -173,15 +172,15 @@ class MetadataProcessor:
         return tables
     
     def _parse_relationships_file(self, rows: List[Dict[str, str]]) -> List[Relationship]:
-        """Parse relationships CSV file with headers like [FromTableName], [ToColumnName]"""
+        """Parse relationships CSV file with headers like FromTableName, ToColumnName"""
         relationships = []
         try:
             for row in rows:
-                from_table = row.get('[FromTableName]', '').strip()
-                from_column = row.get('[FromColumnName]', '').strip()
-                to_table = row.get('[ToTableName]', '').strip()
-                to_column = row.get('[ToColumnName]', '').strip()
-                cardinality = row.get('[Cardinality]', 'one_to_many').strip().lower()
+                from_table = row.get('FromTableName', '').strip()
+                from_column = row.get('FromColumnName', '').strip()
+                to_table = row.get('ToTableName', '').strip()
+                to_column = row.get('ToColumnName', '').strip()
+                cardinality = row.get('Cardinality', 'one_to_many').strip().lower()
                 
                 if from_table and to_table and from_column and to_column:
                     relationship = Relationship(
