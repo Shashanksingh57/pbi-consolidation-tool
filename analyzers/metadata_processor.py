@@ -48,31 +48,28 @@ class MetadataProcessor:
             # Read CSV content and get headers
             csv_file = io.StringIO(csv_content)
             reader = csv.DictReader(csv_file)
-            original_headers = reader.fieldnames or []
-            
-            logger.info(f"Detected CSV headers: {original_headers}")
-            
-            # Reset file position and read rows
-            csv_file.seek(0)
-            reader = csv.DictReader(csv_file)
             rows = list(reader)
             
             # Convert headers to lowercase for case-insensitive matching
-            headers = [h.lower() for h in original_headers]
+            headers = [h.lower() for h in reader.fieldnames or []]
+            original_headers = reader.fieldnames or []
             
-            # Initialize return structure
+            logger.info(f"Detected CSV headers: {original_headers}")
+            logger.info(f"Lowercase headers for matching: {headers}")
+            
+            # Initialize return structure  
             measures = []
             tables = []
             relationships = []
             data_sources = []
             
-            # Identify file type based on headers (case-insensitive) and delegate parsing
+            # Robust case-insensitive file identification with specific column headers
             if 'measure_name' in headers and 'expression' in headers:
                 logger.info("Identified as measures file")
                 measures = self._parse_measures_file(rows)
                 
             elif 'tablename' in headers and 'datatype' in headers:
-                logger.info("Identified as tables file")
+                logger.info("Identified as tables file") 
                 tables = self._parse_tables_file(rows)
                 
             elif 'fromtable' in headers and 'tocolumn' in headers:
