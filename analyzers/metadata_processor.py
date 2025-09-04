@@ -17,6 +17,13 @@ class MetadataProcessor:
     def __init__(self):
         self.dax_functions = self._load_dax_functions()
     
+    def _get_case_insensitive_value(self, row: Dict[str, str], key: str) -> str:
+        """Get value from row dictionary using case-insensitive key matching"""
+        for actual_key, value in row.items():
+            if actual_key.lower() == key.lower():
+                return value.strip()
+        return ''
+    
     def _load_dax_functions(self) -> set:
         """Load common DAX functions for analysis"""
         return {
@@ -41,14 +48,17 @@ class MetadataProcessor:
             # Read CSV content and get headers
             csv_file = io.StringIO(csv_content)
             reader = csv.DictReader(csv_file)
-            headers = reader.fieldnames or []
+            original_headers = reader.fieldnames or []
             
-            logger.info(f"Detected CSV headers: {headers}")
+            logger.info(f"Detected CSV headers: {original_headers}")
             
             # Reset file position and read rows
             csv_file.seek(0)
             reader = csv.DictReader(csv_file)
             rows = list(reader)
+            
+            # Convert headers to lowercase for case-insensitive matching
+            headers = [h.lower() for h in original_headers]
             
             # Initialize return structure
             measures = []
@@ -56,27 +66,27 @@ class MetadataProcessor:
             relationships = []
             data_sources = []
             
-            # Identify file type based on headers and delegate parsing
-            if 'MEASURE_NAME' in headers and 'EXPRESSION' in headers:
+            # Identify file type based on headers (case-insensitive) and delegate parsing
+            if 'measure_name' in headers and 'expression' in headers:
                 logger.info("Identified as measures file")
                 measures = self._parse_measures_file(rows)
                 
-            elif 'TableName' in headers and 'DataType' in headers:
+            elif 'tablename' in headers and 'datatype' in headers:
                 logger.info("Identified as tables file")
                 tables = self._parse_tables_file(rows)
                 
-            elif 'FromTable' in headers and 'ToColumn' in headers:
+            elif 'fromtable' in headers and 'tocolumn' in headers:
                 logger.info("Identified as relationships file")
                 relationships = self._parse_relationships_file(rows)
                 
             else:
-                logger.warning(f"Unknown CSV file type. Headers: {headers}")
+                logger.warning(f"Unknown CSV file type. Headers: {original_headers}")
                 return {
                     'measures': [],
                     'tables': [],
                     'relationships': [],
                     'data_sources': [],
-                    'error': f'Unknown CSV format. Expected headers for measures, tables, or relationships. Got: {headers}'
+                    'error': f'Unknown CSV format. Expected headers for measures, tables, or relationships. Got: {original_headers}'
                 }
             
             return {
@@ -107,11 +117,11 @@ class MetadataProcessor:
         measures = []
         try:
             for row in rows:
-                measure_name = row.get('MEASURE_NAME', '').strip()
-                expression = row.get('EXPRESSION', '').strip()
-                table_name = row.get('TABLE_NAME', '').strip()
-                description = row.get('DESCRIPTION', '').strip()
-                format_string = row.get('FORMAT_STRING', '').strip()
+                measure_name = self._get_case_insensitive_value(row, 'MEASURE_NAME')
+                expression = self._get_case_insensitive_value(row, 'EXPRESSION')
+                table_name = self._get_case_insensitive_value(row, 'TABLE_NAME')
+                description = self._get_case_insensitive_value(row, 'DESCRIPTION')
+                format_string = self._get_case_insensitive_value(row, 'FORMAT_STRING')
                 
                 if measure_name and expression:
                     measure = DAXMeasure(
@@ -137,7 +147,7 @@ class MetadataProcessor:
             # Group rows by TableName since each row represents a column
             table_groups = {}
             for row in rows:
-                table_name = row.get('TableName', '').strip()
+                table_name = self._get_case_insensitive_value(row, 'TableName')
                 if table_name:
                     if table_name not in table_groups:
                         table_groups[table_name] = []
@@ -148,8 +158,8 @@ class MetadataProcessor:
                 # Extract column information
                 columns = []
                 for col_row in column_rows:
-                    explicit_name = col_row.get('ExplicitName', '').strip()
-                    column_name = col_row.get('Name', '').strip()
+                    explicit_name = self._get_case_insensitive_value(col_row, 'ExplicitName')
+                    column_name = self._get_case_insensitive_value(col_row, 'Name')
                     # Use ExplicitName if available, otherwise use Name
                     col_name = explicit_name or column_name
                     if col_name and col_name not in columns:
@@ -160,7 +170,7 @@ class MetadataProcessor:
                 # Try to get row count from first column entry (if available)
                 row_count = None
                 if column_rows:
-                    row_count_str = column_rows[0].get('RowCount', '').strip()
+                    row_count_str = self._get_case_insensitive_value(column_rows[0], 'RowCount')
                     try:
                         row_count = int(row_count_str) if row_count_str.isdigit() else None
                     except (ValueError, TypeError):
@@ -188,19 +198,19 @@ class MetadataProcessor:
         relationships = []
         try:
             for row in rows:
-                # Use exact column names from DAX Studio relationships export
-                from_table = row.get('FromTable', '').strip()
-                from_column = row.get('FromColumn', '').strip()
-                to_table = row.get('ToTable', '').strip()
-                to_column = row.get('ToColumn', '').strip()
+                # Use case-insensitive column access for DAX Studio relationships export
+                from_table = self._get_case_insensitive_value(row, 'FromTable')
+                from_column = self._get_case_insensitive_value(row, 'FromColumn')
+                to_table = self._get_case_insensitive_value(row, 'ToTable')
+                to_column = self._get_case_insensitive_value(row, 'ToColumn')
                 
-                # Handle various possible cardinality column names
+                # Handle various possible cardinality column names (case-insensitive)
                 cardinality = (
-                    row.get('Cardinality', '') or 
-                    row.get('CrossFilteringBehavior', '') or 
-                    row.get('Multiplicity', '') or 
+                    self._get_case_insensitive_value(row, 'Cardinality') or 
+                    self._get_case_insensitive_value(row, 'CrossFilteringBehavior') or 
+                    self._get_case_insensitive_value(row, 'Multiplicity') or 
                     'one_to_many'
-                ).strip().lower()
+                ).lower()
                 
                 # Normalize cardinality values
                 if 'many' in cardinality and 'one' in cardinality:
