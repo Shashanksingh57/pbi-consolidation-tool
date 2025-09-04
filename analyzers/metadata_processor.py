@@ -32,48 +32,56 @@ class MetadataProcessor:
     
     def parse_dax_studio_export(self, csv_content: str) -> Dict[str, Any]:
         """
-        Parse DAX Studio export CSV and extract measures, tables, relationships
+        Parse DAX Studio export CSV and extract measures, tables, or relationships
+        based on column headers to identify file type
         """
         try:
-            logger.info("Parsing DAX Studio export")
+            logger.info("Parsing DAX Studio export - identifying file type by headers")
             
-            # Read CSV content
+            # Read CSV content and get headers
             csv_file = io.StringIO(csv_content)
+            reader = csv.DictReader(csv_file)
+            headers = reader.fieldnames or []
+            
+            logger.info(f"Detected CSV headers: {headers}")
+            
+            # Reset file position and read rows
+            csv_file.seek(0)
             reader = csv.DictReader(csv_file)
             rows = list(reader)
             
+            # Initialize return structure
             measures = []
-            tables = {}
+            tables = []
             relationships = []
             data_sources = []
             
-            # Process each row based on ObjectType
-            for row in rows:
-                object_type = row.get('ObjectType', '').lower()
+            # Identify file type based on headers and delegate parsing
+            if '[MEASURE_NAME]' in headers and '[EXPRESSION]' in headers:
+                logger.info("Identified as measures file")
+                measures = self._parse_measures_file(rows)
                 
-                if object_type == 'measure':
-                    measure = self._parse_measure(row)
-                    if measure:
-                        measures.append(measure)
+            elif '[TableName]' in headers and '[Structure]' in headers:
+                logger.info("Identified as tables file")
+                tables = self._parse_tables_file(rows)
                 
-                elif object_type == 'table':
-                    table = self._parse_table(row)
-                    if table:
-                        tables[table.table_name] = table
+            elif '[FromTableName]' in headers and '[ToColumnName]' in headers:
+                logger.info("Identified as relationships file")
+                relationships = self._parse_relationships_file(rows)
                 
-                elif object_type == 'relationship':
-                    relationship = self._parse_relationship(row)
-                    if relationship:
-                        relationships.append(relationship)
-                
-                elif object_type == 'datasource':
-                    source = self._parse_data_source(row)
-                    if source:
-                        data_sources.append(source)
+            else:
+                logger.warning(f"Unknown CSV file type. Headers: {headers}")
+                return {
+                    'measures': [],
+                    'tables': [],
+                    'relationships': [],
+                    'data_sources': [],
+                    'error': f'Unknown CSV format. Expected headers for measures, tables, or relationships. Got: {headers}'
+                }
             
             return {
                 'measures': measures,
-                'tables': list(tables.values()),
+                'tables': tables,
                 'relationships': relationships,
                 'data_sources': data_sources,
                 'summary': {
@@ -94,68 +102,104 @@ class MetadataProcessor:
                 'error': str(e)
             }
     
-    def _parse_measure(self, row: Dict[str, str]) -> Optional[DAXMeasure]:
-        """Parse a measure row from DAX Studio export"""
+    def _parse_measures_file(self, rows: List[Dict[str, str]]) -> List[DAXMeasure]:
+        """Parse measures CSV file with headers like [MEASURE_NAME], [EXPRESSION]"""
+        measures = []
         try:
-            return DAXMeasure(
-                measure_name=row.get('ObjectName', ''),
-                dax_formula=row.get('Expression', ''),
-                table_name=row.get('TableName', ''),
-                description=row.get('Description', ''),
-                format_string=row.get('FormatString', '')
-            )
+            for row in rows:
+                measure_name = row.get('[MEASURE_NAME]', '').strip()
+                expression = row.get('[EXPRESSION]', '').strip()
+                table_name = row.get('[TABLE_NAME]', '').strip()
+                description = row.get('[DESCRIPTION]', '').strip()
+                format_string = row.get('[FORMAT_STRING]', '').strip()
+                
+                if measure_name and expression:
+                    measure = DAXMeasure(
+                        measure_name=measure_name,
+                        dax_formula=expression,
+                        table_name=table_name or 'Unknown',
+                        description=description,
+                        format_string=format_string
+                    )
+                    measures.append(measure)
+                    logger.debug(f"Parsed measure: {measure_name}")
+                    
         except Exception as e:
-            logger.warning(f"Error parsing measure: {str(e)}")
-            return None
-    
-    def _parse_table(self, row: Dict[str, str]) -> Optional[DataTable]:
-        """Parse a table row from DAX Studio export"""
-        try:
-            # Extract column information if available
-            columns = []
-            if 'Columns' in row and row['Columns']:
-                columns = row['Columns'].split(',')
+            logger.error(f"Error parsing measures file: {str(e)}")
             
-            return DataTable(
-                table_name=row.get('ObjectName', ''),
-                column_count=len(columns) if columns else 0,
-                row_count=int(row.get('RowCount', 0)) if row.get('RowCount', '').isdigit() else None,
-                columns=columns,
-                table_type=self._infer_table_type(row.get('ObjectName', ''))
-            )
-        except Exception as e:
-            logger.warning(f"Error parsing table: {str(e)}")
-            return None
+        logger.info(f"Parsed {len(measures)} measures from CSV")
+        return measures
     
-    def _parse_relationship(self, row: Dict[str, str]) -> Optional[Relationship]:
-        """Parse a relationship row from DAX Studio export"""
+    def _parse_tables_file(self, rows: List[Dict[str, str]]) -> List[DataTable]:
+        """Parse tables CSV file with headers like [TableName], [Structure]"""
+        tables = []
         try:
-            return Relationship(
-                from_table=row.get('FromTable', ''),
-                to_table=row.get('ToTable', ''),
-                from_column=row.get('FromColumn', ''),
-                to_column=row.get('ToColumn', ''),
-                relationship_type=row.get('Cardinality', 'one_to_many').lower()
-            )
+            for row in rows:
+                table_name = row.get('[TableName]', '').strip()
+                structure = row.get('[Structure]', '').strip()
+                row_count_str = row.get('[RowCount]', '0').strip()
+                
+                # Parse row count
+                try:
+                    row_count = int(row_count_str) if row_count_str.isdigit() else None
+                except (ValueError, TypeError):
+                    row_count = None
+                
+                # Parse columns from structure if available
+                columns = []
+                column_count = 0
+                if structure:
+                    # Structure typically contains column information
+                    # For now, we'll extract basic info, but this might need adjustment
+                    # based on the actual DAX Studio export format
+                    columns = [col.strip() for col in structure.split(',') if col.strip()]
+                    column_count = len(columns)
+                
+                if table_name:
+                    table = DataTable(
+                        table_name=table_name,
+                        column_count=column_count,
+                        row_count=row_count,
+                        columns=columns,
+                        table_type=self._infer_table_type(table_name)
+                    )
+                    tables.append(table)
+                    logger.debug(f"Parsed table: {table_name} with {column_count} columns")
+                    
         except Exception as e:
-            logger.warning(f"Error parsing relationship: {str(e)}")
-            return None
+            logger.error(f"Error parsing tables file: {str(e)}")
+            
+        logger.info(f"Parsed {len(tables)} tables from CSV")
+        return tables
     
-    def _parse_data_source(self, row: Dict[str, str]) -> Optional[DataSource]:
-        """Parse a data source row from DAX Studio export"""
+    def _parse_relationships_file(self, rows: List[Dict[str, str]]) -> List[Relationship]:
+        """Parse relationships CSV file with headers like [FromTableName], [ToColumnName]"""
+        relationships = []
         try:
-            return DataSource(
-                source_name=row.get('ObjectName', ''),
-                source_type=row.get('SourceType', ''),
-                connection_details={
-                    'server': row.get('Server', ''),
-                    'database': row.get('Database', ''),
-                    'connection_string': row.get('ConnectionString', '')
-                }
-            )
+            for row in rows:
+                from_table = row.get('[FromTableName]', '').strip()
+                from_column = row.get('[FromColumnName]', '').strip()
+                to_table = row.get('[ToTableName]', '').strip()
+                to_column = row.get('[ToColumnName]', '').strip()
+                cardinality = row.get('[Cardinality]', 'one_to_many').strip().lower()
+                
+                if from_table and to_table and from_column and to_column:
+                    relationship = Relationship(
+                        from_table=from_table,
+                        to_table=to_table,
+                        from_column=from_column,
+                        to_column=to_column,
+                        relationship_type=cardinality
+                    )
+                    relationships.append(relationship)
+                    logger.debug(f"Parsed relationship: {from_table}.{from_column} -> {to_table}.{to_column}")
+                    
         except Exception as e:
-            logger.warning(f"Error parsing data source: {str(e)}")
-            return None
+            logger.error(f"Error parsing relationships file: {str(e)}")
+            
+        logger.info(f"Parsed {len(relationships)} relationships from CSV")
+        return relationships
+    
     
     def _infer_table_type(self, table_name: str) -> str:
         """Infer table type based on naming conventions"""
@@ -439,3 +483,25 @@ class MetadataProcessor:
         
         total_complexity = measure_complexity + table_complexity + relationship_complexity
         return min(total_complexity / 10, 10.0)  # Normalize to 0-10 scale
+    
+    def _extract_dax_functions(self, formula: str) -> List[str]:
+        """Extract DAX functions from a formula"""
+        if not formula:
+            return []
+        
+        used_functions = []
+        formula_upper = formula.upper()
+        
+        for func in self.dax_functions:
+            if func in formula_upper:
+                used_functions.append(func)
+        
+        return used_functions
+    
+    def _calculate_dax_complexity(self, formula: str) -> float:
+        """Calculate complexity score for a DAX formula"""
+        if not formula:
+            return 0.0
+        
+        analysis = self.analyze_dax_formula(formula)
+        return analysis.get('complexity_score', 0.0)
