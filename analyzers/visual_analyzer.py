@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import logging
+import os
 from typing import List, Dict, Any
 from PIL import Image
 from openai import OpenAI
@@ -17,7 +18,7 @@ class VisualAnalyzer:
     
     def __init__(self, openai_client: OpenAI):
         self.client = openai_client
-        self.model = "gpt-4-vision-preview"
+        self.model = os.getenv("GPT_MODEL", "gpt-4o")
     
     def _encode_image(self, image: Image.Image) -> str:
         """Convert PIL image to base64 for API"""

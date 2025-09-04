@@ -387,7 +387,7 @@ class MetadataProcessor:
             
             for metadata_file in metadata_files:
                 # Read file content
-                file_content = await metadata_file.read()
+                file_content = metadata_file.read()
                 csv_content = file_content.decode('utf-8')
                 
                 # Parse the CSV file

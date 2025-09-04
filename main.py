@@ -256,11 +256,20 @@ async def get_similarity_matrix():
         "consolidation_groups": consolidation_groups
     }
 
-@app.post("/api/v1/batch-analysis", dependencies=[Depends(verify_token)])
-async def batch_analysis(files: List[UploadFile] = File(...)):
-    """Batch analysis endpoint for multiple dashboards with multiple views"""
+@app.post("/api/v1/process-dashboards", dependencies=[Depends(verify_token)])
+async def process_dashboards(files: List[UploadFile] = File(...), dashboard_info: str = None):
+    """Process dashboards to extract visual and metadata information"""
     try:
-        logger.info(f"Starting batch analysis with {len(files)} files")
+        logger.info(f"Starting dashboard processing with {len(files)} files")
+        
+        # Parse dashboard info from JSON if provided
+        dashboard_names = {}
+        if dashboard_info:
+            try:
+                info = json.loads(dashboard_info)
+                dashboard_names = info.get('dashboard_names', {})
+            except json.JSONDecodeError:
+                logger.warning("Could not parse dashboard_info JSON")
         
         # Organize files by dashboard
         dashboard_files = {}
@@ -274,10 +283,13 @@ async def batch_analysis(files: List[UploadFile] = File(...)):
                 parts = filename.split('_')
                 if len(parts) >= 2:
                     dashboard_id = f"dashboard_{parts[1]}"
+                    dashboard_num = parts[1]
                     
                     if dashboard_id not in dashboard_files:
+                        # Use custom name if provided, otherwise fallback to generic name
+                        custom_name = dashboard_names.get(dashboard_num, f"Dashboard {parts[1]}")
                         dashboard_files[dashboard_id] = {
-                            'name': f"Dashboard {parts[1]}",
+                            'name': custom_name,
                             'views': [],
                             'metadata': []
                         }
@@ -297,6 +309,7 @@ async def batch_analysis(files: List[UploadFile] = File(...)):
             )
             
             # Process views (screenshots)
+            view_summaries = []
             if files_data['views']:
                 visual_results = await visual_analyzer.analyze_multiple_images(
                     files_data['views'], dashboard_id, files_data['name']
@@ -305,8 +318,20 @@ async def batch_analysis(files: List[UploadFile] = File(...)):
                 dashboard_profile.kpi_cards.extend(visual_results.get('kpi_cards', []))
                 dashboard_profile.filters.extend(visual_results.get('filters', []))
                 dashboard_profile.total_pages = len(files_data['views'])
+                
+                # Store view summaries for the review stage
+                for i, view_file in enumerate(files_data['views']):
+                    await view_file.seek(0)
+                    file_content = await view_file.read()
+                    view_data = base64.b64encode(file_content).decode('utf-8')
+                    view_summaries.append({
+                        'name': f"View {i+1}",
+                        'data': view_data,
+                        'type': view_file.content_type
+                    })
             
             # Process metadata
+            metadata_summary = {}
             if files_data['metadata']:
                 metadata_results = await metadata_processor.analyze_metadata_files(
                     files_data['metadata'], dashboard_id
@@ -314,22 +339,94 @@ async def batch_analysis(files: List[UploadFile] = File(...)):
                 dashboard_profile.measures.extend(metadata_results.get('measures', []))
                 dashboard_profile.tables.extend(metadata_results.get('tables', []))
                 dashboard_profile.relationships.extend(metadata_results.get('relationships', []))
+                
+                metadata_summary = metadata_results.get('summary', {})
             
+            # Store in global profiles for later similarity analysis
             dashboard_profiles[dashboard_id] = dashboard_profile
-            processed_dashboards.append(dashboard_profile)
-        
-        # Perform similarity analysis if we have multiple dashboards
-        if len(processed_dashboards) > 1:
-            similarity_results = similarity_engine.analyze_batch(processed_dashboards)
-            similarity_scores.extend(similarity_results['similarity_scores'])
-            consolidation_groups.extend(similarity_results['consolidation_groups'])
+            processed_dashboards.append({
+                'profile': dashboard_profile,
+                'view_summaries': view_summaries,
+                'metadata_summary': metadata_summary
+            })
         
         return AnalysisResponse(
             success=True,
-            message=f"Batch analysis completed for {len(processed_dashboards)} dashboards",
+            message=f"Dashboard processing completed for {len(processed_dashboards)} dashboards",
             data={
-                "dashboards_processed": len(processed_dashboards),
-                "total_views": sum(d.total_pages for d in processed_dashboards),
+                "dashboards": [
+                    {
+                        "dashboard_id": item['profile'].dashboard_id,
+                        "dashboard_name": item['profile'].dashboard_name,
+                        "total_pages": item['profile'].total_pages,
+                        "visual_elements_count": len(item['profile'].visual_elements),
+                        "measures_count": len(item['profile'].measures),
+                        "tables_count": len(item['profile'].tables),
+                        "relationships_count": len(item['profile'].relationships),
+                        "view_summaries": item['view_summaries'],
+                        "metadata_summary": item['metadata_summary']
+                    }
+                    for item in processed_dashboards
+                ]
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error processing dashboards: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/run-similarity", dependencies=[Depends(verify_token)])
+async def run_similarity():
+    """Run similarity analysis on processed dashboards"""
+    try:
+        logger.info("Running similarity analysis on processed dashboards")
+        
+        if len(dashboard_profiles) < 2:
+            raise HTTPException(status_code=400, detail="Need at least 2 dashboards for similarity analysis")
+        
+        # Clear previous similarity results
+        similarity_scores.clear()
+        consolidation_groups.clear()
+        
+        # Run similarity analysis
+        processed_dashboards = list(dashboard_profiles.values())
+        similarity_results = similarity_engine.analyze_batch(processed_dashboards)
+        similarity_scores.extend(similarity_results['similarity_scores'])
+        consolidation_groups.extend(similarity_results['consolidation_groups'])
+        
+        return AnalysisResponse(
+            success=True,
+            message=f"Similarity analysis completed",
+            data={
+                "dashboards_analyzed": len(processed_dashboards),
+                "similarity_pairs": len(similarity_scores),
+                "consolidation_groups": len(consolidation_groups)
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in similarity analysis: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/batch-analysis", dependencies=[Depends(verify_token)])
+async def batch_analysis(files: List[UploadFile] = File(...), dashboard_info: str = None):
+    """Legacy batch analysis endpoint - processes and runs similarity in one step"""
+    try:
+        # First process dashboards
+        process_response = await process_dashboards(files, dashboard_info)
+        
+        if not process_response.success:
+            return process_response
+        
+        # Then run similarity analysis
+        similarity_response = await run_similarity()
+        
+        return AnalysisResponse(
+            success=True,
+            message=f"Complete batch analysis finished",
+            data={
+                "dashboards_processed": len(process_response.data.get('dashboards', [])),
+                "total_views": sum(d.get('total_pages', 0) for d in process_response.data.get('dashboards', [])),
                 "similarity_pairs": len(similarity_scores),
                 "consolidation_groups": len(consolidation_groups)
             }
