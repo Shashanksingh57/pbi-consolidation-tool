@@ -65,7 +65,7 @@ class MetadataProcessor:
                 logger.info("Identified as tables file")
                 tables = self._parse_tables_file(rows)
                 
-            elif 'FromTableName' in headers and 'ToColumnName' in headers:
+            elif 'FromTable' in headers and 'ToColumn' in headers:
                 logger.info("Identified as relationships file")
                 relationships = self._parse_relationships_file(rows)
                 
@@ -131,56 +131,89 @@ class MetadataProcessor:
         return measures
     
     def _parse_tables_file(self, rows: List[Dict[str, str]]) -> List[DataTable]:
-        """Parse tables CSV file with headers like TableName, ExplicitName"""
+        """Parse tables CSV file - group columns by TableName to create DataTable objects"""
         tables = []
         try:
+            # Group rows by TableName since each row represents a column
+            table_groups = {}
             for row in rows:
                 table_name = row.get('TableName', '').strip()
-                explicit_name = row.get('ExplicitName', '').strip()
-                row_count_str = row.get('RowCount', '0').strip()
-                
-                # Parse row count
-                try:
-                    row_count = int(row_count_str) if row_count_str.isdigit() else None
-                except (ValueError, TypeError):
-                    row_count = None
-                
-                # Parse columns from explicit_name or other available data
-                columns = []
-                column_count = 0
-                if explicit_name:
-                    # ExplicitName typically contains table information
-                    # For now, we'll use the explicit name as a single column reference
-                    columns = [explicit_name] if explicit_name != table_name else []
-                    column_count = len(columns)
-                
                 if table_name:
-                    table = DataTable(
-                        table_name=table_name,
-                        column_count=column_count,
-                        row_count=row_count,
-                        columns=columns,
-                        table_type=self._infer_table_type(table_name)
-                    )
-                    tables.append(table)
-                    logger.debug(f"Parsed table: {table_name} with {column_count} columns")
+                    if table_name not in table_groups:
+                        table_groups[table_name] = []
+                    table_groups[table_name].append(row)
+            
+            # Create DataTable object for each unique table
+            for table_name, column_rows in table_groups.items():
+                # Extract column information
+                columns = []
+                for col_row in column_rows:
+                    explicit_name = col_row.get('ExplicitName', '').strip()
+                    column_name = col_row.get('Name', '').strip()
+                    # Use ExplicitName if available, otherwise use Name
+                    col_name = explicit_name or column_name
+                    if col_name and col_name not in columns:
+                        columns.append(col_name)
+                
+                column_count = len(columns)
+                
+                # Try to get row count from first column entry (if available)
+                row_count = None
+                if column_rows:
+                    row_count_str = column_rows[0].get('RowCount', '').strip()
+                    try:
+                        row_count = int(row_count_str) if row_count_str.isdigit() else None
+                    except (ValueError, TypeError):
+                        row_count = None
+                
+                # Create DataTable object
+                table = DataTable(
+                    table_name=table_name,
+                    column_count=column_count,
+                    row_count=row_count,
+                    columns=columns,
+                    table_type=self._infer_table_type(table_name)
+                )
+                tables.append(table)
+                logger.debug(f"Parsed table: {table_name} with {column_count} columns: {columns[:5]}{'...' if len(columns) > 5 else ''}")
                     
         except Exception as e:
             logger.error(f"Error parsing tables file: {str(e)}")
             
-        logger.info(f"Parsed {len(tables)} tables from CSV")
+        logger.info(f"Parsed {len(tables)} tables from CSV with column grouping")
         return tables
     
     def _parse_relationships_file(self, rows: List[Dict[str, str]]) -> List[Relationship]:
-        """Parse relationships CSV file with headers like FromTableName, ToColumnName"""
+        """Parse relationships CSV file using correct DAX Studio column names"""
         relationships = []
         try:
             for row in rows:
-                from_table = row.get('FromTableName', '').strip()
-                from_column = row.get('FromColumnName', '').strip()
-                to_table = row.get('ToTableName', '').strip()
-                to_column = row.get('ToColumnName', '').strip()
-                cardinality = row.get('Cardinality', 'one_to_many').strip().lower()
+                # Use exact column names from DAX Studio relationships export
+                from_table = row.get('FromTable', '').strip()
+                from_column = row.get('FromColumn', '').strip()
+                to_table = row.get('ToTable', '').strip()
+                to_column = row.get('ToColumn', '').strip()
+                
+                # Handle various possible cardinality column names
+                cardinality = (
+                    row.get('Cardinality', '') or 
+                    row.get('CrossFilteringBehavior', '') or 
+                    row.get('Multiplicity', '') or 
+                    'one_to_many'
+                ).strip().lower()
+                
+                # Normalize cardinality values
+                if 'many' in cardinality and 'one' in cardinality:
+                    if cardinality.startswith('many'):
+                        cardinality = 'many_to_one'
+                    else:
+                        cardinality = 'one_to_many'
+                elif 'many' in cardinality:
+                    cardinality = 'many_to_many'
+                elif 'one' in cardinality:
+                    cardinality = 'one_to_one'
+                else:
+                    cardinality = 'one_to_many'  # default
                 
                 if from_table and to_table and from_column and to_column:
                     relationship = Relationship(
@@ -191,7 +224,9 @@ class MetadataProcessor:
                         relationship_type=cardinality
                     )
                     relationships.append(relationship)
-                    logger.debug(f"Parsed relationship: {from_table}.{from_column} -> {to_table}.{to_column}")
+                    logger.debug(f"Parsed relationship: {from_table}.{from_column} -> {to_table}.{to_column} ({cardinality})")
+                else:
+                    logger.warning(f"Incomplete relationship data: FromTable='{from_table}', FromColumn='{from_column}', ToTable='{to_table}', ToColumn='{to_column}'")
                     
         except Exception as e:
             logger.error(f"Error parsing relationships file: {str(e)}")
