@@ -1,0 +1,36 @@
+# Core API framework
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# Environment and configuration
+python-dotenv>=1.0.0
+
+# Image processing
+pillow>=10.0.0
+opencv-python-headless>=4.8.0
+
+# Utilities and data processing
+numpy>=1.25.0
+requests>=2.31.0
+pandas>=2.1.0
+openpyxl>=3.1.0
+
+# UI framework
+streamlit>=1.28.0
+plotly>=5.17.0
+
+# AI integration
+openai>=1.0.0
+pydantic>=2.5.0
+
+# String processing and similarity
+fuzzywuzzy>=0.18.0
+python-Levenshtein>=0.23.0
+
+# System monitoring
+psutil>=5.9.0
+
+# Testing (optional)
+pytest>=7.4.0
+httpx>=0.25.0
