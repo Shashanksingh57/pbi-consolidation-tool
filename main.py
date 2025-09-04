@@ -145,7 +145,7 @@ async def upload_metadata(
         
         # Parse metadata based on type
         if metadata_type == "dax_studio":
-            metadata = await metadata_processor.parse_dax_studio_export(file_content.decode('utf-8'))
+            metadata = await metadata_processor.parse_dax_studio_export(file_content.decode('utf-8-sig'))
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported metadata type: {metadata_type}")
         
@@ -337,7 +337,7 @@ async def process_dashboards(files: List[UploadFile] = File(...), dashboard_info
                 metadata_contents = []
                 for metadata_file in files_data['metadata']:
                     file_content = await metadata_file.read()
-                    csv_content = file_content.decode('utf-8')
+                    csv_content = file_content.decode('utf-8-sig')
                     metadata_contents.append(csv_content)
                 
                 # Process with synchronous method
