@@ -1,4 +1,4 @@
-# streamlit_app.py - Working version with Power BI API integration
+# streamlit_app.py - Refactored Power BI Dashboard Consolidation Tool with Batch Workflow
 
 import os
 import io
@@ -10,7 +10,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from typing import List, Dict, Any
 from datetime import datetime
-from power_bi_api_client import PowerBIAPIClient
 
 # Configure page
 st.set_page_config(
@@ -63,25 +62,25 @@ def load_custom_css():
 # Session state initialization
 def init_session_state():
     if 'stage' not in st.session_state:
-        st.session_state.stage = 'setup'
-    if 'data_source' not in st.session_state:
-        st.session_state.data_source = 'manual'
+        st.session_state.stage = 'method_choice'
+    if 'analysis_method' not in st.session_state:
+        st.session_state.analysis_method = None
     if 'num_dashboards' not in st.session_state:
         st.session_state.num_dashboards = 2
-    if 'dashboard_data' not in st.session_state:
-        st.session_state.dashboard_data = []
-    if 'analyzed_dashboards' not in st.session_state:
-        st.session_state.analyzed_dashboards = None
+    if 'dashboard_config' not in st.session_state:
+        st.session_state.dashboard_config = {}
+    if 'uploaded_files' not in st.session_state:
+        st.session_state.uploaded_files = {}
+    if 'analysis_results' not in st.session_state:
+        st.session_state.analysis_results = None
     if 'similarity_matrix' not in st.session_state:
         st.session_state.similarity_matrix = None
-    if 'pbi_client' not in st.session_state:
-        st.session_state.pbi_client = None
-    if 'workspaces' not in st.session_state:
-        st.session_state.workspaces = []
-    if 'selected_workspace' not in st.session_state:
-        st.session_state.selected_workspace = None
-    if 'workspace_reports' not in st.session_state:
-        st.session_state.workspace_reports = []
+    if 'api_credentials' not in st.session_state:
+        st.session_state.api_credentials = {}
+    if 'selected_workspaces' not in st.session_state:
+        st.session_state.selected_workspaces = []
+    if 'selected_reports' not in st.session_state:
+        st.session_state.selected_reports = []
 
 # Header
 def render_header():
@@ -95,617 +94,804 @@ def render_header():
             📊 Power BI Dashboard Consolidation Tool
         </h1>
         <p style='color: white; opacity: 0.95; margin-top: 0.5rem; font-size: 1.1rem;'>
-            Identify and consolidate duplicate dashboards using AI-powered analysis
+            Identify and consolidate duplicate dashboards using AI-powered batch analysis
         </p>
     </div>
     """, unsafe_allow_html=True)
 
-# Progress indicator
+# Progress tracker
 def render_progress():
-    stages = ['Setup', 'Analysis', 'Results', 'Report']
-    stage_map = {'setup': 0, 'analysis': 1, 'results': 2, 'report': 3}
-    current_idx = stage_map.get(st.session_state.stage, 0)
+    # Define stages for different workflows
+    local_stages = {
+        'method_choice': 1,
+        'dashboard_config': 2,
+        'file_upload': 3,
+        'analysis': 4,
+        'results': 5
+    }
     
-    progress_html = "<div style='display: flex; justify-content: space-between; margin: 1rem 0;'>"
+    api_stages = {
+        'method_choice': 1,
+        'api_credentials': 2,
+        'workspace_selection': 3,
+        'analysis': 4,
+        'results': 5
+    }
     
-    for i, stage in enumerate(stages):
-        if i == current_idx:
-            progress_html += f"<div style='color: #0C62FB; font-weight: bold;'>▶ {stage}</div>"
-        elif i < current_idx:
-            progress_html += f"<div style='color: #28a745; font-weight: bold;'>✓ {stage}</div>"
-        else:
-            progress_html += f"<div style='color: #6c757d;'>○ {stage}</div>"
+    # Choose the appropriate stages based on analysis method
+    if st.session_state.get('analysis_method') == "REST API Analysis":
+        stages = api_stages
+        stage_names = [
+            "🎯 Analysis Method",
+            "🔐 Credentials", 
+            "🏢 Workspace Selection",
+            "🔄 Analysis",
+            "📈 Results"
+        ]
+    else:
+        stages = local_stages
+        stage_names = [
+            "🎯 Analysis Method",
+            "⚙️ Dashboard Config", 
+            "📁 File Upload",
+            "🔄 Analysis",
+            "📈 Results"
+        ]
     
-    progress_html += "</div>"
-    st.markdown(progress_html, unsafe_allow_html=True)
+    current_stage = stages.get(st.session_state.stage, 1)
+    progress = (current_stage - 1) / 4
+    
+    st.progress(progress)
+    
+    cols = st.columns(5)
+    for i, (col, stage_name) in enumerate(zip(cols, stage_names)):
+        with col:
+            if i < current_stage:
+                st.markdown(f"✅ **{stage_name}**")
+            elif i == current_stage - 1:
+                st.markdown(f"🔵 **{stage_name}**")
+            else:
+                st.markdown(f"⚪ {stage_name}")
 
 # Sidebar
 def render_sidebar():
-    with st.sidebar:
-        st.markdown("""
-        <div style='text-align: center; padding: 1rem; background: linear-gradient(135deg, #0C62FB 0%, #0952D0 100%); 
-                    border-radius: 8px; margin-bottom: 1rem; display: flex; flex-direction: column; align-items: center;'>
-            <h3 style='color: white; margin: 0; font-size: 1.2rem; text-align: center; width: 100%;'>📊 PBI Consolidation</h3>
-            <p style='color: white; opacity: 0.9; margin: 0.2rem 0 0 0; font-size: 0.9rem; text-align: center; width: 100%;'>Dashboard Analysis Tool</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("### 🔧 Workflow Progress")
-        
-        stages = ['Setup', 'Analysis', 'Results', 'Report']
-        stage_map = {'setup': 0, 'analysis': 1, 'results': 2, 'report': 3}
-        current_idx = stage_map.get(st.session_state.stage, 0)
-        
-        for i, stage in enumerate(stages):
-            if i == current_idx:
-                st.success(f"▶ {stage}")
-            elif i < current_idx:
-                st.success(f"✓ {stage}")
-            else:
-                st.text(f"○ {stage}")
-        
-        st.markdown("---")
-        
-        with st.expander("⚙️ Settings"):
-            st.slider("Merge Threshold", 70, 95, 85)
-            st.checkbox("Include visual analysis", value=True)
-            st.checkbox("Include DAX analysis", value=True)
-        
-        st.markdown("---")
-        
-        if st.button("🔄 Start Over", use_container_width=True):
-            for key in ['stage', 'dashboard_data', 'analyzed_dashboards', 'similarity_matrix']:
-                if key in st.session_state:
-                    del st.session_state[key]
-            init_session_state()
-            st.rerun()
-        
-        with st.expander("❓ Help"):
-            st.markdown("""
-            **Multi-Dashboard Workflow:**
-            
-            1. **Setup**: Define dashboards to compare
-            2. **Upload**: Screenshots + metadata for each
-            3. **Analysis**: AI-powered comparison
-            4. **Results**: Interactive similarity matrix
-            5. **Report**: Download recommendations
-            """)
-
-# Power BI API connection functions
-def render_pbi_connection():
-    st.subheader("🔗 Power BI Service Connection")
+    st.sidebar.header("🎛️ Dashboard Controls")
     
-    with st.expander("⚙️ API Configuration", expanded=True):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            client_id = st.text_input(
-                "Azure AD Client ID *",
-                placeholder="12345678-1234-1234-1234-123456789abc",
-                help="Application (client) ID from Azure AD app registration"
-            )
-            tenant_id = st.text_input(
-                "Azure AD Tenant ID *", 
-                placeholder="abcdefgh-abcd-abcd-abcd-abcdefghijkl",
-                help="Directory (tenant) ID from Azure AD"
-            )
-        
-        with col2:
-            client_secret = st.text_input(
-                "Client Secret *",
-                type="password",
-                help="Client secret from Azure AD app registration"
-            )
-            use_mock = st.checkbox(
-                "Use Mock Mode (for testing)",
-                value=False,
-                help="Enable to test without real API credentials"
-            )
-        
-        if st.button("🔌 Connect to Power BI", type="primary", use_container_width=True):
-            if use_mock or (client_id and tenant_id and client_secret):
-                try:
-                    with st.spinner("Connecting to Power BI Service..."):
-                        if use_mock:
-                            st.session_state.pbi_client = PowerBIAPIClient(mock_mode=True)
-                        else:
-                            st.session_state.pbi_client = PowerBIAPIClient(
-                                client_id=client_id,
-                                client_secret=client_secret, 
-                                tenant_id=tenant_id
-                            )
-                        
-                        # Test connection by fetching workspaces
-                        workspaces = st.session_state.pbi_client.get_all_workspaces()
-                        st.session_state.workspaces = workspaces
-                        
-                        st.success("✅ Connected to Power BI Service successfully!")
-                        st.rerun()
-                        
-                except Exception as e:
-                    st.error(f"❌ Connection failed: {str(e)}")
-            else:
-                st.warning("Please provide all required credentials")
+    # Current stage info
+    st.sidebar.info(f"**Current Stage:** {st.session_state.stage.replace('_', ' ').title()}")
     
-    return st.session_state.pbi_client is not None
-
-def render_workspace_selection():
-    st.subheader("🏢 Workspace & Dashboard Selection")
+    if st.session_state.analysis_method:
+        st.sidebar.success(f"**Method:** {st.session_state.analysis_method}")
     
-    if not st.session_state.workspaces:
-        st.warning("No workspaces available. Please connect to Power BI first.")
-        return False
+    if st.session_state.dashboard_config:
+        st.sidebar.write("**Dashboard Configuration:**")
+        for db_id, config in st.session_state.dashboard_config.items():
+            st.sidebar.write(f"• {db_id}: {config['views']} views")
     
-    with st.expander("📂 Select Workspace", expanded=True):
-        workspace_options = {ws['name']: ws['id'] for ws in st.session_state.workspaces}
-        
-        selected_workspace_name = st.selectbox(
-            "Choose Workspace",
-            options=list(workspace_options.keys()),
-            help="Select the workspace containing dashboards to analyze"
-        )
-        
-        selected_workspace_id = workspace_options[selected_workspace_name]
-        st.session_state.selected_workspace = {
-            'name': selected_workspace_name,
-            'id': selected_workspace_id
-        }
-        
-        if st.button("📊 Load Dashboards", use_container_width=True):
-            try:
-                with st.spinner("Loading workspace dashboards..."):
-                    reports = st.session_state.pbi_client.get_workspace_reports(selected_workspace_id)
-                    st.session_state.workspace_reports = reports
-                    
-                st.success(f"✅ Found {len(reports)} reports in workspace")
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"❌ Failed to load dashboards: {str(e)}")
-    
-    return len(st.session_state.workspace_reports) > 0
-
-def render_api_dashboard_selection():
-    st.subheader("📋 Dashboard Selection")
-    
-    if not st.session_state.workspace_reports:
-        st.warning("No reports loaded. Please select a workspace first.")
-        return []
-    
-    selected_reports = []
-    
-    with st.expander("✅ Select Dashboards for Analysis", expanded=True):
-        st.info(f"Select at least 2 dashboards from {len(st.session_state.workspace_reports)} available reports")
-        
-        for report in st.session_state.workspace_reports:
-            if st.checkbox(f"📊 {report['name']}", key=f"report_{report['id']}"):
-                selected_reports.append(report)
-        
-        if len(selected_reports) >= 2:
-            st.success(f"✅ {len(selected_reports)} dashboards selected for analysis")
-        elif len(selected_reports) == 1:
-            st.warning("Select at least one more dashboard for comparison")
-        else:
-            st.info("Select dashboards to analyze")
-    
-    return selected_reports
-
-# Setup stage
-def render_setup():
-    st.header("📊 Dashboard Consolidation Setup")
-    
-    # Data source selection
-    st.subheader("📥 Data Source")
-    data_source = st.radio(
-        "Choose how to provide dashboard data:",
-        options=["manual", "api"],
-        format_func=lambda x: "📤 Manual Upload (Screenshots + CSV)" if x == "manual" 
-                              else "☁️ Power BI Service (REST API)",
-        index=0 if st.session_state.data_source == "manual" else 1,
-        help="Manual: Upload screenshots and DAX exports. API: Connect directly to Power BI Service."
-    )
-    st.session_state.data_source = data_source
-    
-    st.divider()
-    
-    if data_source == "api":
-        # Power BI API workflow
-        connected = render_pbi_connection()
-        
-        if connected:
-            workspace_ready = render_workspace_selection()
-            
-            if workspace_ready:
-                selected_reports = render_api_dashboard_selection()
-                
-                if len(selected_reports) >= 2:
-                    col1, col2 = st.columns([3, 1])
-                    
-                    with col1:
-                        st.success(f"✅ Ready to analyze {len(selected_reports)} dashboards via Power BI API")
-                    
-                    with col2:
-                        if st.button("🚀 Start API Analysis", type="primary", use_container_width=True):
-                            # Convert API reports to dashboard_data format
-                            dashboard_data = []
-                            for report in selected_reports:
-                                dashboard_data.append({
-                                    'id': report['id'],
-                                    'name': report['name'],
-                                    'source': 'api',
-                                    'report_data': report,
-                                    'workspace_id': st.session_state.selected_workspace['id']
-                                })
-                            
-                            st.session_state.dashboard_data = dashboard_data
-                            st.session_state.stage = 'analysis'
-                            st.rerun()
-        
-    else:
-        # Manual upload workflow (existing)
-        render_manual_setup()
-
-def render_manual_setup():
-    col1, col2, col3 = st.columns([2, 2, 1])
-    
-    with col1:
-        num_dashboards = st.number_input(
-            "How many dashboards do you want to analyze?",
-            min_value=2,
-            max_value=20,
-            value=st.session_state.num_dashboards
-        )
-        st.session_state.num_dashboards = num_dashboards
-    
-    with col2:
-        st.info(f"📊 You'll be comparing {num_dashboards} dashboards")
-    
-    st.divider()
-    
-    dashboard_data = []
-    all_valid = True
-    
-    for i in range(num_dashboards):
-        with st.expander(f"Dashboard {i+1}: Configuration", expanded=(i==0)):
-            dash_name = st.text_input(
-                "Dashboard Name *",
-                key=f"name_{i}",
-                placeholder="e.g., Sales Performance Dashboard"
-            )
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("### 📸 Frontend (Visual Layer)")
-                st.caption("Upload dashboard screenshots for visual analysis")
-                
-                screenshots = st.file_uploader(
-                    "Dashboard Screenshots",
-                    type=['png', 'jpg', 'jpeg'],
-                    accept_multiple_files=True,
-                    key=f"screenshots_{i}",
-                    help="Upload all pages/tabs of this dashboard"
-                )
-                
-                if screenshots:
-                    st.success(f"✓ {len(screenshots)} screenshots uploaded")
-                    cols = st.columns(4)
-                    for idx, img in enumerate(screenshots[:4]):
-                        with cols[idx % 4]:
-                            st.image(img, use_column_width=True)
-            
-            with col2:
-                st.markdown("### 📊 Backend (Data Layer)")
-                st.caption("Upload DAX Studio CSV exports")
-                
-                measures_csv = st.file_uploader(
-                    "Measures Export (CSV) *",
-                    type=['csv'],
-                    key=f"measures_{i}",
-                    help="DAX Studio: EVALUATE INFO.MEASURES()"
-                )
-                
-                tables_csv = st.file_uploader(
-                    "Tables Export (CSV) *",
-                    type=['csv'],
-                    key=f"tables_{i}",
-                    help="DAX Studio: EVALUATE INFO.TABLES()"
-                )
-                
-                relationships_csv = st.file_uploader(
-                    "Relationships Export (CSV) *",
-                    type=['csv'],
-                    key=f"relationships_{i}",
-                    help="DAX Studio: EVALUATE INFO.RELATIONSHIPS()"
-                )
-                
-                if measures_csv and tables_csv and relationships_csv:
-                    st.success("✓ All required files uploaded")
-                else:
-                    st.warning("⚠ Upload all required CSV files (measures, tables, relationships)")
-            
-            dashboard_data.append({
-                'id': i + 1,
-                'name': dash_name,
-                'screenshots': screenshots,
-                'measures': measures_csv,
-                'tables': tables_csv,
-                'relationships': relationships_csv
-            })
-            
-            if not (dash_name and screenshots and measures_csv and tables_csv and relationships_csv):
-                all_valid = False
-    
-    st.divider()
-    
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        if all_valid:
-            st.success(f"✅ All {num_dashboards} dashboards ready for analysis")
-        else:
-            st.error("❌ Some dashboards are missing required files")
-    
-    with col2:
-        if st.button("🚀 Analyze Dashboards", type="primary", use_container_width=True, disabled=not all_valid):
-            st.session_state.dashboard_data = dashboard_data
-            st.session_state.stage = 'analysis'
-            st.rerun()
-
-# Analysis stage
-def render_analysis():
-    st.header("🔄 Analyzing Dashboards")
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    st.subheader("Phase 1: Extracting Dashboard Profiles")
-    analyzed_dashboards = []
-    
-    dashboard_data = st.session_state.dashboard_data
-    is_api_source = dashboard_data[0].get('source') == 'api' if dashboard_data else False
-    
-    for idx, dashboard in enumerate(dashboard_data):
-        status_text.text(f"Analyzing {dashboard['name']}...")
-        
-        if is_api_source:
-            # API-based analysis
-            with st.spinner(f"📊 Extracting metadata via API for {dashboard['name']}..."):
-                try:
-                    workspace_id = dashboard['workspace_id']
-                    report_id = dashboard['id']
-                    
-                    # Get dataset ID from report
-                    report_data = st.session_state.pbi_client.get_report_details(workspace_id, report_id)
-                    dataset_id = report_data.get('datasetId')
-                    
-                    if dataset_id:
-                        # Extract measures, tables, and relationships via API
-                        measures_df = st.session_state.pbi_client.get_dataset_measures(dataset_id, workspace_id)
-                        tables_df = st.session_state.pbi_client.get_dataset_tables(dataset_id, workspace_id)
-                        relationships_df = st.session_state.pbi_client.get_dataset_relationships(dataset_id, workspace_id)
-                        
-                        measures_count = len(measures_df) if measures_df is not None else 0
-                        tables_count = len(tables_df) if tables_df is not None else 0
-                        relationships_count = len(relationships_df) if relationships_df is not None else 0
-                        
-                        # Calculate complexity based on measure expressions
-                        complexity_score = 0
-                        if measures_df is not None and not measures_df.empty and 'Expression' in measures_df.columns:
-                            complexity_score = measures_df['Expression'].str.len().mean()
-                        
-                        dax_profile = {
-                            'measures_count': measures_count,
-                            'tables_count': tables_count,
-                            'relationships_count': relationships_count,
-                            'complexity_score': complexity_score / 100 if complexity_score else 0  # Normalize to 0-10 scale
-                        }
-                    else:
-                        dax_profile = {
-                            'measures_count': 0,
-                            'tables_count': 0,
-                            'relationships_count': 0,
-                            'complexity_score': 0
-                        }
-                    
-                    # For API mode, we don't have screenshots, so use report metadata
-                    visual_profile = {
-                        'visuals_count': 5,  # Default estimate
-                        'visual_types': ['bar_chart', 'line_chart', 'kpi_card'],
-                        'pages': 1  # Default estimate
-                    }
-                    
-                except Exception as e:
-                    st.warning(f"Error extracting API data for {dashboard['name']}: {str(e)}")
-                    # Fallback to default values
-                    dax_profile = {'measures_count': 5, 'tables_count': 3, 'relationships_count': 2, 'complexity_score': 2.0}
-                    visual_profile = {'visuals_count': 5, 'visual_types': ['unknown'], 'pages': 1}
-                    
-        else:
-            # Manual upload analysis (existing logic)
-            with st.spinner(f"🤖 AI Vision Analysis for {dashboard['name']}..."):
-                visual_profile = {
-                    'visuals_count': len(dashboard['screenshots']) * 3 if dashboard['screenshots'] else 0,
-                    'visual_types': ['bar_chart', 'line_chart', 'kpi_card'],
-                    'pages': len(dashboard['screenshots']) if dashboard['screenshots'] else 1
-                }
-            
-            with st.spinner(f"📊 Extracting DAX metadata for {dashboard['name']}..."):
-                # Process uploaded CSV files for manual workflow
-                measures_count = 0
-                tables_count = 0
-                relationships_count = 0
-                complexity_score = 0
-                
-                try:
-                    # Process measures CSV
-                    if dashboard['measures']:
-                        import pandas as pd
-                        measures_df = pd.read_csv(dashboard['measures'])
-                        measures_count = len(measures_df)
-                        # Calculate complexity based on DAX formula length
-                        if 'Expression' in measures_df.columns:
-                            complexity_score = measures_df['Expression'].str.len().mean() / 100 if not measures_df['Expression'].isna().all() else 0
-                    
-                    # Process tables CSV
-                    if dashboard['tables']:
-                        tables_df = pd.read_csv(dashboard['tables'])
-                        tables_count = len(tables_df)
-                    
-                    # Process relationships CSV
-                    if dashboard['relationships']:
-                        relationships_df = pd.read_csv(dashboard['relationships'])
-                        relationships_count = len(relationships_df)
-                        
-                except Exception as e:
-                    st.warning(f"Error processing CSV files for {dashboard['name']}: {str(e)}")
-                    # Fallback to defaults
-                    measures_count, tables_count, relationships_count = 5, 3, 2
-                    complexity_score = 2.0
-                
-                dax_profile = {
-                    'measures_count': measures_count,
-                    'tables_count': tables_count,
-                    'relationships_count': relationships_count,
-                    'complexity_score': max(complexity_score, 0.1)  # Ensure minimum complexity
-                }
-        
-        analyzed_dashboards.append({
-            'name': dashboard['name'],
-            'visual_profile': visual_profile,
-            'dax_profile': dax_profile
-        })
-        
-        progress_bar.progress((idx + 1) / (len(dashboard_data) * 2))
-    
-    st.subheader("Phase 2: Computing Similarity Matrix")
-    
-    similarity_matrix = []
-    
-    for i in range(len(analyzed_dashboards)):
-        row = []
-        for j in range(len(analyzed_dashboards)):
-            if i == j:
-                row.append(100.0)
-            elif j < i:
-                row.append(similarity_matrix[j][i])
-            else:
-                import random
-                similarity_score = random.uniform(45, 95)
-                row.append(similarity_score)
-        
-        similarity_matrix.append(row)
-        progress_bar.progress(0.5 + (i + 1) / (len(analyzed_dashboards) * 2))
-    
-    status_text.text("✅ Analysis complete!")
-    progress_bar.progress(1.0)
-    
-    st.session_state.analyzed_dashboards = analyzed_dashboards
-    st.session_state.similarity_matrix = similarity_matrix
-    st.session_state.stage = 'results'
-    st.rerun()
-
-# Results stage
-def render_results():
-    st.header("📊 Similarity Analysis Results")
-    
-    analyzed_dashboards = st.session_state.analyzed_dashboards
-    similarity_matrix = st.session_state.similarity_matrix
-    
-    dashboard_names = [d['name'] for d in analyzed_dashboards]
-    
-    fig = px.imshow(
-        similarity_matrix,
-        labels=dict(x="Dashboard", y="Dashboard", color="Similarity %"),
-        x=dashboard_names,
-        y=dashboard_names,
-        color_continuous_scale="RdYlGn",
-        text_auto=True,
-        aspect="auto",
-        range_color=[0, 100]
-    )
-    
-    fig.update_layout(
-        title="Dashboard Similarity Matrix",
-        height=600,
-        font=dict(size=12)
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    st.subheader("🎯 Consolidation Candidates")
-    
-    candidates = []
-    for i in range(len(similarity_matrix)):
-        for j in range(i+1, len(similarity_matrix[i])):
-            score = similarity_matrix[i][j]
-            if score >= 70:
-                candidates.append({
-                    'Dashboard 1': dashboard_names[i],
-                    'Dashboard 2': dashboard_names[j],
-                    'Similarity': f"{score:.1f}%",
-                    'Action': 'Merge' if score >= 85 else 'Review'
-                })
-    
-    if candidates:
-        df = pd.DataFrame(candidates)
-        st.dataframe(df, use_container_width=True)
-        
-        merge_count = len([c for c in candidates if c['Action'] == 'Merge'])
-        review_count = len([c for c in candidates if c['Action'] == 'Review'])
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("High Similarity (Merge)", merge_count)
-        with col2:
-            st.metric("Medium Similarity (Review)", review_count)
-        with col3:
-            potential_reduction = merge_count + (review_count // 2)
-            st.metric("Potential Dashboard Reduction", potential_reduction)
-    else:
-        st.info("No high-similarity pairs found (threshold: 70%)")
-    
-    if st.button("Generate Report", type="primary"):
-        st.session_state.stage = 'report'
+    # Reset button
+    if st.sidebar.button("🔄 Reset All", type="secondary"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
         st.rerun()
 
-# Report stage
-def render_report():
-    st.header("📈 Consolidation Report")
+# Stage 1: Analysis Method Choice
+def render_method_choice():
+    st.header("🎯 Choose Analysis Method")
+    
+    st.write("""
+    Select how you want to analyze your Power BI dashboards:
+    """)
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("📊 JSON Report")
-        st.write("Comprehensive analysis data in JSON format")
+        st.subheader("📤 Local Batch Analysis")
+        st.write("""
+        **Best for one-off comparisons or when you don't have API access.** This method gives you complete control by using manually exported metadata files (from DAX Studio) and screenshots you upload directly.
         
-        if st.button("Generate JSON Report"):
-            report_data = {
-                'analysis_timestamp': datetime.now().isoformat(),
-                'dashboards_analyzed': st.session_state.num_dashboards,
-                'high_similarity_pairs': 3,
-                'consolidation_recommendations': [
-                    {'action': 'merge', 'dashboards': ['Sales Dashboard', 'Regional Sales'], 'similarity': 89.2}
-                ]
-            }
-            
-            st.success("✅ JSON Report Generated")
-            
-            json_str = json.dumps(report_data, indent=2)
-            st.download_button(
-                label="📥 Download JSON Report",
-                data=json_str,
-                file_name=f"dashboard_consolidation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json"
-            )
+        **Use this method if:**
+        - You are working with local .pbix files
+        - Your organization has not configured API access
+        - You need to compare a small, specific set of dashboards
+        """)
+        
+        if st.button("Start Local Batch Analysis", type="primary", key="local_batch"):
+            st.session_state.analysis_method = "Local Batch Analysis"
+            st.session_state.stage = 'dashboard_config'
+            st.rerun()
     
     with col2:
-        st.subheader("📋 Excel Report")
-        st.write("Detailed Excel workbook with multiple worksheets")
+        st.subheader("☁️ REST API Analysis")
+        st.write("""
+        **The recommended method for automated and scalable analysis.** Connect directly to your Power BI Service to fetch dashboard data from entire workspaces in real-time. Requires initial setup.
         
-        if st.button("Generate Excel Report"):
-            st.success("✅ Excel Report Generated")
-            st.info("Excel report generation completed.")
+        **Use this method if:**
+        - You have a Power BI Pro or Premium license
+        - You need to analyze many dashboards across one or more workspaces
+        - You want to automate the data extraction process
+        """)
+        
+        if st.button("Start REST API Analysis", type="primary", key="rest_api"):
+            st.session_state.analysis_method = "REST API Analysis"
+            st.session_state.stage = 'api_credentials'
+            st.rerun()
+
+# Stage 2: Dashboard Configuration
+def render_dashboard_config():
+    st.header("⚙️ Configure Dashboards and Views")
+    
+    st.write("Define the scope of your consolidation analysis:")
+    
+    # Number of dashboards
+    num_dashboards = st.number_input(
+        "Number of Dashboards to Compare",
+        min_value=2,
+        max_value=10,
+        value=st.session_state.num_dashboards,
+        help="How many different dashboards do you want to compare?"
+    )
+    
+    st.session_state.num_dashboards = num_dashboards
+    
+    st.divider()
+    
+    # Configure views for each dashboard
+    st.subheader("📋 Configure Views for Each Dashboard")
+    
+    dashboard_config = {}
+    
+    for i in range(1, num_dashboards + 1):
+        with st.expander(f"Dashboard {i} Configuration", expanded=True):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                name = st.text_input(
+                    f"Dashboard {i} Name",
+                    value=f"Dashboard {i}",
+                    key=f"dashboard_{i}_name"
+                )
+            
+            with col2:
+                num_views = st.number_input(
+                    f"Number of Views for Dashboard {i}",
+                    min_value=1,
+                    max_value=20,
+                    value=1,
+                    key=f"dashboard_{i}_views"
+                )
+            
+            dashboard_config[f"dashboard_{i}"] = {
+                'name': name,
+                'views': num_views
+            }
+    
+    st.session_state.dashboard_config = dashboard_config
+    
+    # Summary
+    st.subheader("📊 Configuration Summary")
+    total_files = sum(config['views'] + 1 for config in dashboard_config.values())  # +1 for metadata
+    st.info(f"""
+    **Total Dashboards:** {num_dashboards}  
+    **Total Views:** {sum(config['views'] for config in dashboard_config.values())}  
+    **Expected Files:** {total_files} (including metadata files)
+    """)
+    
+    # Navigation
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("← Back to Method Choice", key="back_to_method"):
+            st.session_state.stage = 'method_choice'
+            st.rerun()
+    
+    with col2:
+        if st.button("Continue to File Upload →", type="primary", key="to_file_upload"):
+            st.session_state.stage = 'file_upload'
+            st.rerun()
+
+# Stage 3: File Upload
+def render_file_upload():
+    st.header("📁 Upload Dashboard Files")
+    
+    st.write("Upload screenshots and metadata files for each configured dashboard:")
+    
+    uploaded_files = {}
+    
+    for db_id, config in st.session_state.dashboard_config.items():
+        st.subheader(f"📊 {config['name']}")
+        
+        uploaded_files[db_id] = {
+            'name': config['name'],
+            'views': [],
+            'view_names': [],
+            'metadata': []
+        }
+        
+        # Screenshots for each view
+        st.write(f"📸 **Screenshots ({config['views']} views needed):**")
+        
+        for view_i in range(config['views']):
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                view_file = st.file_uploader(
+                    f"Upload {config['name']} - View {view_i + 1}",
+                    type=['png', 'jpg', 'jpeg'],
+                    key=f"{db_id}_view_{view_i}",
+                    help=f"Screenshot of view {view_i + 1} for {config['name']}"
+                )
+                if view_file:
+                    uploaded_files[db_id]['views'].append(view_file)
+            
+            with col2:
+                view_name = st.text_input(
+                    "Optional: Enter view name",
+                    placeholder="e.g., Sales Summary",
+                    key=f"{db_id}_view_name_{view_i}",
+                    help="Optional custom name for this view"
+                )
+                uploaded_files[db_id]['view_names'].append(view_name if view_name else f"View {view_i + 1}")
+        
+        st.divider()
+        
+        # Metadata files
+        st.write("🗂️ **Metadata Files (DAX Studio exports):**")
+        metadata_files = st.file_uploader(
+            f"Upload Metadata for {config['name']}",
+            type=['csv'],
+            accept_multiple_files=True,
+            key=f"{db_id}_metadata",
+            help="Upload measures.csv, tables.csv, relationships.csv from DAX Studio"
+        )
+        if metadata_files:
+            uploaded_files[db_id]['metadata'].extend(metadata_files)
+        
+        st.divider()
+    
+    st.session_state.uploaded_files = uploaded_files
+    
+    # Validation and summary
+    st.subheader("📋 Upload Summary")
+    
+    total_views_uploaded = sum(len(files['views']) for files in uploaded_files.values())
+    total_views_expected = sum(config['views'] for config in st.session_state.dashboard_config.values())
+    total_metadata = sum(len(files['metadata']) for files in uploaded_files.values())
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Views Uploaded", f"{total_views_uploaded}/{total_views_expected}")
+    with col2:
+        st.metric("Metadata Files", total_metadata)
+    with col3:
+        ready = total_views_uploaded == total_views_expected and total_metadata > 0
+        st.metric("Ready for Analysis", "✅ Yes" if ready else "❌ No")
+    
+    # Navigation
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("← Back to Configuration", key="back_to_config"):
+            st.session_state.stage = 'dashboard_config'
+            st.rerun()
+    
+    with col2:
+        can_proceed = total_views_uploaded == total_views_expected and total_metadata > 0
+        if st.button("Start Analysis →", type="primary", disabled=not can_proceed, key="start_analysis"):
+            st.session_state.stage = 'analysis'
+            st.rerun()
+
+# Stage 4: Analysis
+def render_analysis():
+    st.header("🔄 Running Analysis")
+    
+    if not st.session_state.analysis_results:
+        analysis_method = st.session_state.get('analysis_method', 'Local Batch Analysis')
+        
+        if analysis_method == "REST API Analysis":
+            st.write("Analyzing your selected reports using automated Power BI API extraction...")
+            render_api_analysis()
+        else:
+            st.write("Analyzing your dashboards using AI-powered comparison...")
+            render_local_analysis()
+    else:
+        st.success("✅ Analysis completed!")
+        if st.button("View Results →", type="primary"):
+            st.session_state.stage = 'results'
+            st.rerun()
+
+def render_local_analysis():
+    """Handle local file-based analysis"""
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    try:
+        # Prepare files for API
+        files_to_upload = []
+        
+        for db_id, file_data in st.session_state.uploaded_files.items():
+            db_num = db_id.split('_')[1]
+            
+            # Add view screenshots with custom names
+            for i, view_file in enumerate(file_data['views']):
+                view_name = file_data.get('view_names', [f"View {i+1}"])[i]
+                new_filename = f"dashboard_{db_num}_view_{i+1}_{view_name}.{view_file.name.split('.')[-1]}"
+                files_to_upload.append((new_filename, view_file))
+            
+            # Add metadata files
+            for metadata_file in file_data['metadata']:
+                new_filename = f"dashboard_{db_num}_metadata_{metadata_file.name}"
+                files_to_upload.append((new_filename, metadata_file))
+        
+        progress_bar.progress(0.3)
+        status_text.text("Uploading files to analysis API...")
+        
+        # Call the batch analysis API
+        API_KEY = os.getenv("API_KEY", "supersecrettoken123")
+        API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+        
+        files = []
+        for filename, file_obj in files_to_upload:
+            file_obj.seek(0)  # Reset file pointer
+            files.append(('files', (filename, file_obj.read(), file_obj.type)))
+        
+        progress_bar.progress(0.6)
+        status_text.text("Running AI analysis...")
+        
+        response = requests.post(
+            f"{API_BASE_URL}/api/v1/batch-analysis",
+            files=files,
+            headers={"Authorization": f"Bearer {API_KEY}"},
+            timeout=300
+        )
+        
+        progress_bar.progress(0.9)
+        status_text.text("Processing results...")
+        
+        if response.status_code == 200:
+            st.session_state.analysis_results = response.json()
+            progress_bar.progress(1.0)
+            status_text.text("✅ Analysis completed successfully!")
+            
+            st.success("Analysis completed! Click below to view results.")
+            if st.button("View Results →", type="primary"):
+                st.session_state.stage = 'results'
+                st.rerun()
+        else:
+            st.error(f"Analysis failed: {response.text}")
+            if st.button("← Back to File Upload", key="back_to_upload_error"):
+                st.session_state.stage = 'file_upload'
+                st.rerun()
+    
+    except Exception as e:
+        st.error(f"Error during analysis: {str(e)}")
+        if st.button("← Back to File Upload", key="back_to_upload_exception"):
+            st.session_state.stage = 'file_upload'
+            st.rerun()
+
+def render_api_analysis():
+    """Handle API-based analysis"""
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    try:
+        progress_bar.progress(0.2)
+        status_text.text("Extracting report metadata from Power BI Service...")
+        
+        # Get selected reports data
+        pbi_client = st.session_state.pbi_client
+        selected_reports = st.session_state.selected_reports
+        
+        # For each selected report, extract metadata and pages
+        report_data = []
+        
+        progress_bar.progress(0.4)
+        status_text.text("Processing report pages and datasets...")
+        
+        for report_name in selected_reports:
+            # Extract report information (this would need actual API implementation)
+            # For now, we'll simulate the process
+            report_info = {
+                'name': report_name,
+                'pages': ['Overview', 'Details', 'Summary'],  # Mock data
+                'measures': [],  # Would be extracted via API
+                'tables': [],    # Would be extracted via API
+                'relationships': []  # Would be extracted via API
+            }
+            report_data.append(report_info)
+        
+        progress_bar.progress(0.7)
+        status_text.text("Running similarity analysis...")
+        
+        # Call API analysis endpoint for Power BI data
+        API_KEY = os.getenv("API_KEY", "supersecrettoken123")
+        API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+        
+        # This would need a new API endpoint for Power BI data
+        response = requests.post(
+            f"{API_BASE_URL}/api/v1/api-analysis",
+            json={'reports': report_data},
+            headers={"Authorization": f"Bearer {API_KEY}"},
+            timeout=300
+        )
+        
+        progress_bar.progress(0.9)
+        status_text.text("Processing results...")
+        
+        if response.status_code == 200:
+            st.session_state.analysis_results = response.json()
+            progress_bar.progress(1.0)
+            status_text.text("✅ Analysis completed successfully!")
+            
+            st.success("Analysis completed! Click below to view results.")
+            if st.button("View Results →", type="primary"):
+                st.session_state.stage = 'results'
+                st.rerun()
+        else:
+            # Fallback to mock data for demo
+            st.warning("API analysis endpoint not yet implemented. Generating demo results...")
+            
+            mock_results = {
+                'success': True,
+                'message': 'Mock API analysis completed',
+                'data': {
+                    'dashboards_processed': len(selected_reports),
+                    'total_views': sum(3 for _ in selected_reports),  # Mock 3 pages per report
+                    'similarity_pairs': max(0, len(selected_reports) * (len(selected_reports) - 1) // 2),
+                    'consolidation_groups': max(0, len(selected_reports) // 2)
+                }
+            }
+            
+            st.session_state.analysis_results = mock_results
+            progress_bar.progress(1.0)
+            status_text.text("✅ Demo analysis completed!")
+            
+            st.info("🔬 **Demo Mode:** This shows how API analysis would work. Real implementation would extract actual Power BI metadata.")
+            if st.button("View Demo Results →", type="primary"):
+                st.session_state.stage = 'results'
+                st.rerun()
+    
+    except Exception as e:
+        st.error(f"Error during API analysis: {str(e)}")
+        if st.button("← Back to Workspace Selection", key="back_to_workspace_error"):
+            st.session_state.stage = 'workspace_selection'
+            st.rerun()
+
+# Stage 5: Results
+def render_results():
+    st.header("📈 Analysis Results")
+    
+    if not st.session_state.analysis_results:
+        st.error("No analysis results found. Please run the analysis first.")
+        return
+    
+    results = st.session_state.analysis_results
+    
+    # Summary metrics
+    st.subheader("📊 Analysis Summary")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Dashboards Analyzed", results['data'].get('dashboards_processed', 0))
+    with col2:
+        st.metric("Total Views", results['data'].get('total_views', 0))
+    with col3:
+        st.metric("Similarity Pairs", results['data'].get('similarity_pairs', 0))
+    with col4:
+        st.metric("Consolidation Groups", results['data'].get('consolidation_groups', 0))
+    
+    st.divider()
+    
+    # Get detailed results from API
+    try:
+        API_KEY = os.getenv("API_KEY", "supersecrettoken123")
+        API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+        
+        # Get similarity matrix
+        similarity_response = requests.get(
+            f"{API_BASE_URL}/api/v1/similarity-matrix",
+            headers={"Authorization": f"Bearer {API_KEY}"}
+        )
+        
+        if similarity_response.status_code == 200:
+            similarity_data = similarity_response.json()
+            
+            # Display similarity matrix
+            st.subheader("🔍 Dashboard Similarity Matrix")
+            
+            # Create similarity matrix visualization
+            if similarity_data.get('similarity_scores'):
+                scores = similarity_data['similarity_scores']
+                
+                # Extract dashboard names and create matrix
+                dashboard_names = list(set([s['dashboard1_name'] for s in scores] + [s['dashboard2_name'] for s in scores]))
+                n_dashboards = len(dashboard_names)
+                
+                if n_dashboards > 1:
+                    # Create similarity matrix
+                    similarity_matrix = [[0 for _ in range(n_dashboards)] for _ in range(n_dashboards)]
+                    
+                    # Fill diagonal with 100%
+                    for i in range(n_dashboards):
+                        similarity_matrix[i][i] = 100
+                    
+                    # Fill matrix with similarity scores
+                    for score in scores:
+                        i = dashboard_names.index(score['dashboard1_name'])
+                        j = dashboard_names.index(score['dashboard2_name'])
+                        similarity_matrix[i][j] = score['total_score'] * 100
+                        similarity_matrix[j][i] = score['total_score'] * 100
+                    
+                    # Create heatmap
+                    fig = px.imshow(
+                        similarity_matrix,
+                        labels=dict(x="Dashboard", y="Dashboard", color="Similarity %"),
+                        x=dashboard_names,
+                        y=dashboard_names,
+                        color_continuous_scale="Blues",
+                        title="Dashboard Similarity Heatmap"
+                    )
+                    fig.update_layout(height=500)
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Consolidation recommendations
+                    st.subheader("🎯 Consolidation Recommendations")
+                    
+                    candidates = []
+                    for score in scores:
+                        similarity_pct = score['total_score'] * 100
+                        if similarity_pct >= 70:
+                            candidates.append({
+                                'Dashboard 1': score['dashboard1_name'],
+                                'Dashboard 2': score['dashboard2_name'],
+                                'Similarity': f"{similarity_pct:.1f}%",
+                                'Action': 'Merge' if similarity_pct >= 85 else 'Review'
+                            })
+                    
+                    if candidates:
+                        df = pd.DataFrame(candidates)
+                        st.dataframe(df, use_container_width=True)
+                        
+                        merge_count = len([c for c in candidates if c['Action'] == 'Merge'])
+                        review_count = len([c for c in candidates if c['Action'] == 'Review'])
+                        
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("High Similarity (Merge)", merge_count)
+                        with col2:
+                            st.metric("Medium Similarity (Review)", review_count)
+                        with col3:
+                            potential_reduction = merge_count + (review_count // 2)
+                            st.metric("Potential Dashboard Reduction", potential_reduction)
+                    else:
+                        st.info("No high-similarity pairs found (threshold: 70%)")
+            
+    except Exception as e:
+        st.error(f"Error fetching detailed results: {str(e)}")
+    
+    # Report generation
+    st.subheader("📄 Generate Reports")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("📥 Download JSON Report", type="secondary"):
+            try:
+                API_KEY = os.getenv("API_KEY", "supersecrettoken123")
+                API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+                
+                report_response = requests.post(
+                    f"{API_BASE_URL}/api/v1/generate-report?format=json",
+                    headers={"Authorization": f"Bearer {API_KEY}"}
+                )
+                
+                if report_response.status_code == 200:
+                    report_data = report_response.json()
+                    st.download_button(
+                        label="📥 Download JSON Report",
+                        data=json.dumps(report_data, indent=2),
+                        file_name=f"dashboard_consolidation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json"
+                    )
+                else:
+                    st.error("Failed to generate JSON report")
+            except Exception as e:
+                st.error(f"Error generating JSON report: {str(e)}")
+    
+    with col2:
+        if st.button("📊 Generate Excel Report", type="secondary"):
+            st.info("Excel report generation will be available in the next update.")
+    
+    # Start new analysis
+    st.divider()
+    if st.button("🔄 Start New Analysis", type="primary"):
+        # Reset session state
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+
+# API Credentials Stage
+def render_api_credentials():
+    st.header("🔐 Power BI API Credentials")
+    
+    st.write("""
+    Enter your Azure AD application credentials to connect to Power BI Service.
+    If you don't have these credentials, contact your Power BI administrator.
+    """)
+    
+    with st.form("credentials_form"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            tenant_id = st.text_input(
+                "Tenant ID",
+                value=st.session_state.api_credentials.get('tenant_id', ''),
+                help="Your Azure AD tenant ID (GUID)"
+            )
+            
+            client_id = st.text_input(
+                "Client ID",
+                value=st.session_state.api_credentials.get('client_id', ''),
+                help="Azure AD app registration client ID"
+            )
+        
+        with col2:
+            client_secret = st.text_input(
+                "Client Secret",
+                type="password",
+                value=st.session_state.api_credentials.get('client_secret', ''),
+                help="Azure AD app registration client secret"
+            )
+            
+            st.write("**Required Permissions:**")
+            st.write("• Dataset.ReadWrite.All")
+            st.write("• Report.ReadWrite.All")
+            st.write("• Workspace.ReadWrite.All")
+        
+        submit_credentials = st.form_submit_button("Connect to Power BI", type="primary")
+        
+        if submit_credentials:
+            if tenant_id and client_id and client_secret:
+                st.session_state.api_credentials = {
+                    'tenant_id': tenant_id,
+                    'client_id': client_id,
+                    'client_secret': client_secret
+                }
+                
+                # Test connection
+                try:
+                    with st.spinner("Testing connection to Power BI Service..."):
+                        # Import PowerBI client here to avoid issues if not available
+                        from power_bi_api_client import PowerBIAPIClient
+                        
+                        pbi_client = PowerBIAPIClient(
+                            tenant_id=tenant_id,
+                            client_id=client_id,
+                            client_secret=client_secret,
+                            mock_mode=False
+                        )
+                        
+                        # Test authentication
+                        workspaces = pbi_client.get_workspaces()
+                        
+                        st.success("✅ Connection successful!")
+                        st.session_state.pbi_client = pbi_client
+                        st.session_state.stage = 'workspace_selection'
+                        st.rerun()
+                        
+                except Exception as e:
+                    st.error(f"❌ Connection failed: {str(e)}")
+                    st.info("💡 **Tip:** Try using Mock Mode for testing by setting POWERBI_CLIENT_ID in your .env file to 'mock'")
+                    
+                    # Fallback to mock mode
+                    if st.button("Use Mock Mode for Testing", key="mock_mode"):
+                        try:
+                            from power_bi_api_client import PowerBIAPIClient
+                            pbi_client = PowerBIAPIClient(mock_mode=True)
+                            st.session_state.pbi_client = pbi_client
+                            st.session_state.stage = 'workspace_selection'
+                            st.rerun()
+                        except Exception as mock_error:
+                            st.error(f"Mock mode also failed: {str(mock_error)}")
+            else:
+                st.error("Please fill in all credential fields.")
+    
+    # Navigation
+    if st.button("← Back to Method Choice", key="back_to_method_from_creds"):
+        st.session_state.stage = 'method_choice'
+        st.rerun()
+
+# Workspace Selection Stage  
+def render_workspace_selection():
+    st.header("🏢 Select Workspaces and Reports")
+    
+    st.write("Choose the workspaces and reports you want to analyze for consolidation opportunities.")
+    
+    try:
+        pbi_client = st.session_state.pbi_client
+        
+        # Get workspaces
+        with st.spinner("Loading workspaces..."):
+            workspaces = pbi_client.get_workspaces()
+        
+        if workspaces:
+            st.subheader("📂 Available Workspaces")
+            
+            workspace_options = {ws['name']: ws['id'] for ws in workspaces}
+            selected_workspace_names = st.multiselect(
+                "Select workspaces to analyze:",
+                options=list(workspace_options.keys()),
+                default=st.session_state.selected_workspaces,
+                help="Choose one or more workspaces containing the reports you want to compare"
+            )
+            
+            st.session_state.selected_workspaces = selected_workspace_names
+            
+            if selected_workspace_names:
+                st.divider()
+                st.subheader("📊 Available Reports")
+                
+                all_reports = []
+                for workspace_name in selected_workspace_names:
+                    workspace_id = workspace_options[workspace_name]
+                    
+                    with st.spinner(f"Loading reports from {workspace_name}..."):
+                        reports = pbi_client.get_reports(workspace_id)
+                    
+                    for report in reports:
+                        report['workspace_name'] = workspace_name
+                        all_reports.append(report)
+                
+                if all_reports:
+                    report_options = {}
+                    for report in all_reports:
+                        display_name = f"{report['name']} ({report['workspace_name']})"
+                        report_options[display_name] = {
+                            'id': report['id'],
+                            'workspace_id': report.get('workspace_id'),
+                            'workspace_name': report['workspace_name']
+                        }
+                    
+                    selected_report_names = st.multiselect(
+                        "Select reports to compare:",
+                        options=list(report_options.keys()),
+                        default=st.session_state.selected_reports,
+                        help="Choose 2 or more reports to compare for similarity"
+                    )
+                    
+                    st.session_state.selected_reports = selected_report_names
+                    
+                    if len(selected_report_names) >= 2:
+                        st.success(f"✅ Selected {len(selected_report_names)} reports for analysis")
+                        
+                        # Show summary
+                        st.subheader("📋 Analysis Summary")
+                        st.info(f"""
+                        **Workspaces:** {len(selected_workspace_names)}  
+                        **Reports:** {len(selected_report_names)}  
+                        **Analysis Type:** Automated metadata extraction and visual comparison
+                        """)
+                        
+                        # Navigation
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("← Back to Credentials", key="back_to_creds"):
+                                st.session_state.stage = 'api_credentials'
+                                st.rerun()
+                        
+                        with col2:
+                            if st.button("Start Analysis →", type="primary", key="start_api_analysis"):
+                                st.session_state.stage = 'analysis'
+                                st.rerun()
+                    else:
+                        st.warning("Please select at least 2 reports to compare.")
+                else:
+                    st.warning("No reports found in the selected workspaces.")
+            
+        else:
+            st.error("No workspaces found. Please check your permissions.")
+    
+    except Exception as e:
+        st.error(f"Error loading workspace data: {str(e)}")
+        if st.button("← Back to Credentials", key="back_to_creds_error"):
+            st.session_state.stage = 'api_credentials'
+            st.rerun()
 
 # Main app
 def main():
@@ -716,14 +902,20 @@ def main():
     render_progress()
     render_sidebar()
     
-    if st.session_state.stage == 'setup':
-        render_setup()
+    if st.session_state.stage == 'method_choice':
+        render_method_choice()
+    elif st.session_state.stage == 'dashboard_config':
+        render_dashboard_config()
+    elif st.session_state.stage == 'file_upload':
+        render_file_upload()
+    elif st.session_state.stage == 'api_credentials':
+        render_api_credentials()
+    elif st.session_state.stage == 'workspace_selection':
+        render_workspace_selection()
     elif st.session_state.stage == 'analysis':
         render_analysis()
     elif st.session_state.stage == 'results':
         render_results()
-    elif st.session_state.stage == 'report':
-        render_report()
 
 if __name__ == "__main__":
     main()

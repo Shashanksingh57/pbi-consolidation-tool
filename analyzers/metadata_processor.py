@@ -1,4 +1,4 @@
-# analyzers/dax_analyzer.py - DAX and metadata processing
+# analyzers/metadata_processor.py - Dashboard metadata processing for both local files and API
 
 import csv
 import io
@@ -11,8 +11,8 @@ from models import DAXMeasure, DataTable, DataSource, Relationship
 
 logger = logging.getLogger(__name__)
 
-class DAXAnalyzer:
-    """Analyzes DAX formulas and dashboard metadata"""
+class MetadataProcessor:
+    """Processes dashboard metadata from both local files and Power BI API"""
     
     def __init__(self):
         self.dax_functions = self._load_dax_functions()
@@ -374,3 +374,72 @@ class DAXAnalyzer:
                 'complex': len([c for c in measure_complexities if c > 5])
             }
         }
+    
+    async def analyze_metadata_files(self, metadata_files: List, dashboard_id: str) -> Dict[str, Any]:
+        """
+        Analyze multiple metadata files for a dashboard
+        """
+        try:
+            all_measures = []
+            all_tables = []
+            all_relationships = []
+            all_data_sources = []
+            
+            for metadata_file in metadata_files:
+                # Read file content
+                file_content = await metadata_file.read()
+                csv_content = file_content.decode('utf-8')
+                
+                # Parse the CSV file
+                parsed_data = await self.parse_dax_studio_export(csv_content)
+                
+                # Aggregate results
+                all_measures.extend(parsed_data.get('measures', []))
+                all_tables.extend(parsed_data.get('tables', []))
+                all_relationships.extend(parsed_data.get('relationships', []))
+                all_data_sources.extend(parsed_data.get('data_sources', []))
+                
+                logger.info(f"Processed metadata file {metadata_file.filename} for {dashboard_id}")
+            
+            return {
+                'measures': all_measures,
+                'tables': all_tables,
+                'relationships': all_relationships,
+                'data_sources': all_data_sources,
+                'summary': self._generate_metadata_summary(all_measures, all_tables, all_relationships)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing metadata files for {dashboard_id}: {str(e)}")
+            return {
+                'measures': [],
+                'tables': [],
+                'relationships': [],
+                'data_sources': []
+            }
+    
+    def _generate_metadata_summary(self, measures: List[DAXMeasure], 
+                                 tables: List[DataTable], 
+                                 relationships: List[Relationship]) -> Dict[str, Any]:
+        """Generate summary statistics for metadata"""
+        return {
+            'total_measures': len(measures),
+            'total_tables': len(tables),
+            'total_relationships': len(relationships),
+            'complexity_score': self._calculate_metadata_complexity(measures, tables, relationships),
+            'unique_dax_functions': len(set(
+                func for measure in measures 
+                for func in self._extract_dax_functions(measure.dax_formula)
+            )) if measures else 0
+        }
+    
+    def _calculate_metadata_complexity(self, measures: List[DAXMeasure], 
+                                     tables: List[DataTable], 
+                                     relationships: List[Relationship]) -> float:
+        """Calculate overall metadata complexity score"""
+        measure_complexity = sum(self._calculate_dax_complexity(m.dax_formula) for m in measures)
+        table_complexity = sum(t.column_count for t in tables)
+        relationship_complexity = len(relationships) * 0.5
+        
+        total_complexity = measure_complexity + table_complexity + relationship_complexity
+        return min(total_complexity / 10, 10.0)  # Normalize to 0-10 scale

@@ -121,6 +121,28 @@ class ConsolidationGroup(BaseModel):
     recommendation: ConsolidationRecommendation = Field(..., description="Consolidation recommendation")
     created_at: datetime = Field(default_factory=datetime.now)
 
+# ─── Batch Analysis Models ──────────────────────────────────────────────────
+
+class DashboardView(BaseModel):
+    """Represents a single view/page of a dashboard"""
+    view_name: str = Field(..., description="Name of the view/page")
+    custom_name: Optional[str] = Field(None, description="User-provided custom name for the view")
+    screenshot_filename: Optional[str] = Field(None, description="Screenshot file name")
+    screenshot_data: Optional[bytes] = Field(None, description="Screenshot binary data")
+
+class DashboardInput(BaseModel):
+    """Input model for a single dashboard with multiple views and metadata"""
+    dashboard_id: str = Field(..., description="Unique dashboard identifier")
+    dashboard_name: str = Field(..., description="Dashboard display name")
+    views: List[DashboardView] = Field(..., description="List of dashboard views/pages")
+    metadata_files: List[str] = Field(default_factory=list, description="List of metadata file names")
+    metadata_data: Optional[Dict[str, bytes]] = Field(None, description="Metadata file contents")
+
+class BatchAnalysisRequest(BaseModel):
+    """Request for batch analysis of multiple dashboards"""
+    dashboards: List[DashboardInput] = Field(..., description="List of dashboards to analyze")
+    analysis_config: Optional['AnalysisConfig'] = Field(None, description="Analysis configuration")
+
 # ─── Request/Response Models ────────────────────────────────────────────────
 
 class VisualAnalysisRequest(BaseModel):

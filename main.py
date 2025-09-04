@@ -18,10 +18,11 @@ import pandas as pd
 from models import (
     DashboardProfile, SimilarityScore, ConsolidationGroup,
     VisualAnalysisRequest, MetadataUploadRequest, SimilarityAnalysisRequest,
-    ConsolidationReportRequest, AnalysisResponse
+    ConsolidationReportRequest, AnalysisResponse, BatchAnalysisRequest,
+    DashboardInput, DashboardView
 )
 from analyzers.visual_analyzer import VisualAnalyzer
-from analyzers.dax_analyzer import DAXAnalyzer
+from analyzers.metadata_processor import MetadataProcessor
 from analyzers.similarity import SimilarityEngine
 from utils.report_generator import ReportGenerator
 
@@ -57,7 +58,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 
 # Initialize analyzers
 visual_analyzer = VisualAnalyzer(client)
-dax_analyzer = DAXAnalyzer()
+metadata_processor = MetadataProcessor()
 similarity_engine = SimilarityEngine()
 report_generator = ReportGenerator()
 
@@ -144,7 +145,7 @@ async def upload_metadata(
         
         # Parse metadata based on type
         if metadata_type == "dax_studio":
-            metadata = await dax_analyzer.parse_dax_studio_export(file_content.decode('utf-8'))
+            metadata = await metadata_processor.parse_dax_studio_export(file_content.decode('utf-8'))
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported metadata type: {metadata_type}")
         
@@ -254,6 +255,146 @@ async def get_similarity_matrix():
         "similarity_scores": similarity_scores,
         "consolidation_groups": consolidation_groups
     }
+
+@app.post("/api/v1/batch-analysis", dependencies=[Depends(verify_token)])
+async def batch_analysis(files: List[UploadFile] = File(...)):
+    """Batch analysis endpoint for multiple dashboards with multiple views"""
+    try:
+        logger.info(f"Starting batch analysis with {len(files)} files")
+        
+        # Organize files by dashboard
+        dashboard_files = {}
+        
+        for file in files:
+            # Parse filename to extract dashboard info
+            # Expected format: dashboard_X_view_Y.ext or dashboard_X_metadata.csv
+            filename = file.filename.lower()
+            
+            if 'dashboard_' in filename:
+                parts = filename.split('_')
+                if len(parts) >= 2:
+                    dashboard_id = f"dashboard_{parts[1]}"
+                    
+                    if dashboard_id not in dashboard_files:
+                        dashboard_files[dashboard_id] = {
+                            'name': f"Dashboard {parts[1]}",
+                            'views': [],
+                            'metadata': []
+                        }
+                    
+                    if 'metadata' in filename:
+                        dashboard_files[dashboard_id]['metadata'].append(file)
+                    elif 'view' in filename:
+                        dashboard_files[dashboard_id]['views'].append(file)
+        
+        # Process each dashboard
+        processed_dashboards = []
+        
+        for dashboard_id, files_data in dashboard_files.items():
+            dashboard_profile = DashboardProfile(
+                dashboard_id=dashboard_id,
+                dashboard_name=files_data['name']
+            )
+            
+            # Process views (screenshots)
+            if files_data['views']:
+                visual_results = await visual_analyzer.analyze_multiple_images(
+                    files_data['views'], dashboard_id, files_data['name']
+                )
+                dashboard_profile.visual_elements.extend(visual_results.get('visual_elements', []))
+                dashboard_profile.kpi_cards.extend(visual_results.get('kpi_cards', []))
+                dashboard_profile.filters.extend(visual_results.get('filters', []))
+                dashboard_profile.total_pages = len(files_data['views'])
+            
+            # Process metadata
+            if files_data['metadata']:
+                metadata_results = await metadata_processor.analyze_metadata_files(
+                    files_data['metadata'], dashboard_id
+                )
+                dashboard_profile.measures.extend(metadata_results.get('measures', []))
+                dashboard_profile.tables.extend(metadata_results.get('tables', []))
+                dashboard_profile.relationships.extend(metadata_results.get('relationships', []))
+            
+            dashboard_profiles[dashboard_id] = dashboard_profile
+            processed_dashboards.append(dashboard_profile)
+        
+        # Perform similarity analysis if we have multiple dashboards
+        if len(processed_dashboards) > 1:
+            similarity_results = similarity_engine.analyze_batch(processed_dashboards)
+            similarity_scores.extend(similarity_results['similarity_scores'])
+            consolidation_groups.extend(similarity_results['consolidation_groups'])
+        
+        return AnalysisResponse(
+            success=True,
+            message=f"Batch analysis completed for {len(processed_dashboards)} dashboards",
+            data={
+                "dashboards_processed": len(processed_dashboards),
+                "total_views": sum(d.total_pages for d in processed_dashboards),
+                "similarity_pairs": len(similarity_scores),
+                "consolidation_groups": len(consolidation_groups)
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in batch analysis: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/api-analysis", dependencies=[Depends(verify_token)])
+async def api_analysis(request_data: Dict[str, Any]):
+    """Power BI API-based analysis endpoint"""
+    try:
+        logger.info("Starting Power BI API analysis")
+        
+        reports_data = request_data.get('reports', [])
+        if not reports_data:
+            raise HTTPException(status_code=400, detail="No reports data provided")
+        
+        processed_dashboards = []
+        
+        for report in reports_data:
+            dashboard_id = f"api_{report['name'].replace(' ', '_')}"
+            
+            dashboard_profile = DashboardProfile(
+                dashboard_id=dashboard_id,
+                dashboard_name=report['name']
+            )
+            
+            # Mock processing for now - in real implementation:
+            # 1. Extract measures from report datasets
+            # 2. Get report pages and their visuals
+            # 3. Analyze relationships and data model
+            
+            dashboard_profile.total_pages = len(report.get('pages', ['Page1']))
+            
+            # Add mock data for demonstration
+            dashboard_profile.measures = []  # Would populate from API
+            dashboard_profile.visual_elements = []  # Would populate from API
+            dashboard_profile.complexity_score = 5.0  # Mock score
+            
+            dashboard_profiles[dashboard_id] = dashboard_profile
+            processed_dashboards.append(dashboard_profile)
+        
+        # Perform similarity analysis if we have multiple dashboards
+        if len(processed_dashboards) > 1:
+            similarity_results = similarity_engine.analyze_batch(processed_dashboards)
+            similarity_scores.extend(similarity_results['similarity_scores'])
+            consolidation_groups.extend(similarity_results['consolidation_groups'])
+        
+        return AnalysisResponse(
+            success=True,
+            message=f"API analysis completed for {len(processed_dashboards)} reports",
+            data={
+                "reports_processed": len(processed_dashboards),
+                "total_pages": sum(d.total_pages for d in processed_dashboards),
+                "similarity_pairs": len(similarity_scores),
+                "consolidation_groups": len(consolidation_groups),
+                "analysis_method": "power_bi_api"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in API analysis: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/v1/reset", dependencies=[Depends(verify_token)])
 async def reset_analysis():

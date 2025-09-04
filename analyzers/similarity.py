@@ -10,7 +10,7 @@ from models import (
     DashboardProfile, SimilarityScore, SimilarityBreakdown,
     ConsolidationGroup, ConsolidationRecommendation
 )
-from analyzers.dax_analyzer import DAXAnalyzer
+from analyzers.metadata_processor import MetadataProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ class SimilarityEngine:
     """Engine for calculating dashboard similarity and generating consolidation recommendations"""
     
     def __init__(self):
-        self.dax_analyzer = DAXAnalyzer()
+        self.metadata_processor = MetadataProcessor()
         
         # Default weights for similarity calculation
         self.default_weights = {
@@ -122,7 +122,7 @@ class SimilarityEngine:
         for measure1 in measures1:
             for measure2 in measures2:
                 if measure1.measure_name.lower() == measure2.measure_name.lower():
-                    comparison = self.dax_analyzer.compare_measures(measure1, measure2)
+                    comparison = self.metadata_processor.compare_measures(measure1, measure2)
                     formula_similarities.append(comparison['overall_similarity'])
         
         formula_similarity = sum(formula_similarities) / len(formula_similarities) if formula_similarities else 0.0
@@ -391,3 +391,89 @@ class SimilarityEngine:
             effort_estimate=effort,
             priority=priority
         )
+    
+    def analyze_batch(self, dashboard_profiles: List[DashboardProfile], 
+                     weights: Dict[str, float] = None) -> Dict[str, Any]:
+        """
+        Perform complete batch analysis on a list of dashboard profiles
+        """
+        try:
+            logger.info(f"Starting batch analysis for {len(dashboard_profiles)} dashboards")
+            
+            # Calculate similarity scores for all pairs
+            similarity_scores = self.compare_all_dashboards(dashboard_profiles, weights)
+            
+            # Generate consolidation groups
+            consolidation_groups = []
+            if similarity_scores:
+                consolidation_groups = self.generate_consolidation_groups(
+                    dashboard_profiles, similarity_scores
+                )
+            
+            # Generate summary statistics
+            summary = self._generate_batch_summary(
+                dashboard_profiles, similarity_scores, consolidation_groups
+            )
+            
+            logger.info(f"Batch analysis completed: {len(similarity_scores)} similarity scores, "
+                       f"{len(consolidation_groups)} consolidation groups")
+            
+            return {
+                'similarity_scores': similarity_scores,
+                'consolidation_groups': consolidation_groups,
+                'summary': summary
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in batch analysis: {str(e)}")
+            return {
+                'similarity_scores': [],
+                'consolidation_groups': [],
+                'summary': {}
+            }
+    
+    def _generate_batch_summary(self, dashboard_profiles: List[DashboardProfile],
+                              similarity_scores: List[SimilarityScore],
+                              consolidation_groups: List[ConsolidationGroup]) -> Dict[str, Any]:
+        """Generate summary statistics for batch analysis"""
+        
+        # Overall statistics
+        total_dashboards = len(dashboard_profiles)
+        total_views = sum(d.total_pages for d in dashboard_profiles)
+        total_measures = sum(len(d.measures) for d in dashboard_profiles)
+        total_visuals = sum(len(d.visual_elements) for d in dashboard_profiles)
+        
+        # Similarity statistics
+        high_similarity_pairs = len([s for s in similarity_scores if s.total_score >= 0.85])
+        medium_similarity_pairs = len([s for s in similarity_scores if 0.70 <= s.total_score < 0.85])
+        low_similarity_pairs = len([s for s in similarity_scores if s.total_score < 0.70])
+        
+        avg_similarity = sum(s.total_score for s in similarity_scores) / len(similarity_scores) if similarity_scores else 0
+        
+        # Consolidation statistics
+        merge_groups = len([g for g in consolidation_groups if g.recommendation.action == "merge"])
+        review_groups = len([g for g in consolidation_groups if g.recommendation.action == "review"])
+        
+        # Potential reduction
+        dashboards_in_merge_groups = sum(len(g.dashboard_ids) for g in consolidation_groups if g.recommendation.action == "merge")
+        potential_reduction = dashboards_in_merge_groups - merge_groups if merge_groups > 0 else 0
+        
+        return {
+            'total_dashboards': total_dashboards,
+            'total_views': total_views,
+            'total_measures': total_measures,
+            'total_visuals': total_visuals,
+            'similarity_analysis': {
+                'total_pairs': len(similarity_scores),
+                'high_similarity': high_similarity_pairs,
+                'medium_similarity': medium_similarity_pairs,
+                'low_similarity': low_similarity_pairs,
+                'average_similarity': avg_similarity
+            },
+            'consolidation_potential': {
+                'merge_groups': merge_groups,
+                'review_groups': review_groups,
+                'potential_dashboard_reduction': potential_reduction,
+                'reduction_percentage': (potential_reduction / total_dashboards * 100) if total_dashboards > 0 else 0
+            }
+        }
