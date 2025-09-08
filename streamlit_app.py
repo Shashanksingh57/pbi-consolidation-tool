@@ -347,7 +347,9 @@ def render_sidebar():
     if st.session_state.dashboard_config:
         st.sidebar.write("**Dashboard Configuration:**")
         for db_id, config in st.session_state.dashboard_config.items():
-            st.sidebar.write(f"• {db_id}: {config['views']} views")
+            # Use the user-provided name, not the generic db_id
+            dashboard_name = config.get('name', db_id)
+            st.sidebar.write(f"• {dashboard_name}: {config['views']} views")
     
     # Reset button
     if st.sidebar.button("🔄 Reset All", type="secondary"):
@@ -730,8 +732,18 @@ def render_processing():
                     })
                 
                 # Store full dashboard profiles for detailed comparison
+                # CRITICAL: Store complete data for detailed analysis
                 st.session_state.processed_dashboards = processed_dashboards
                 st.session_state.full_dashboard_profiles = extracted_profiles  # Store complete profiles
+                st.session_state.dashboard_profiles_by_name = {}
+                st.session_state.dashboard_profiles_by_id = {}
+                
+                # Create lookup dictionaries for easy access
+                for dashboard in processed_dashboards:
+                    name = dashboard['dashboard_name']
+                    id = dashboard['dashboard_id']
+                    st.session_state.dashboard_profiles_by_name[name] = dashboard
+                    st.session_state.dashboard_profiles_by_id[id] = dashboard
                 progress_bar.progress(1.0)
                 status_text.text("✅ Phase 1 completed successfully!")
                 
@@ -808,19 +820,6 @@ def render_review():
                 st.metric("Total Visual Elements Found", dashboard.get('visual_elements_count', 0))
                 st.metric("Number of Views/Pages", dashboard.get('total_pages', 0))
                 
-                # Show screenshot preview if available
-                if 'view_summaries' in dashboard:
-                    view_summaries = dashboard.get('view_summaries', [])
-                    if view_summaries and len(view_summaries) > 0:
-                        first_view = view_summaries[0]
-                        if 'data' in first_view:
-                            import base64
-                            try:
-                                img_data = base64.b64decode(first_view['data'])
-                                st.image(img_data, caption=f"Preview - {first_view.get('name', 'View 1')}", use_container_width=True)
-                            except Exception as e:
-                                st.info("Screenshot preview not available")
-                
                 # Show visual types breakdown if available
                 metadata_summary = dashboard.get('metadata_summary', {})
                 if 'visual_types_distribution' in metadata_summary:
@@ -834,23 +833,25 @@ def render_review():
                 else:
                     st.write("• Chart type analysis pending")
                 
-                if dashboard.get('visual_elements_count', 0) > 0:
-                    st.write(f"**Detected Filters:** {dashboard.get('filters_count', 'N/A')}")
-                else:
-                    st.write("**Detected Filters:** Visual analysis pending")
+                # Removed filters display as backend doesn't support it
             
             with col2:
                 st.subheader("🗂️ Metadata Summary")
                 st.metric("Measures Found", metadata_summary.get('measure_count', 0))
                 st.metric("Tables Found", metadata_summary.get('table_count', 0))
-                st.metric("KPI Cards", metadata_summary.get('total_kpi_cards', 0))
-                st.metric("Filters", metadata_summary.get('total_filters', 0))
                 
-                # Show extraction confidence
-                confidence = dashboard.get('extraction_confidence', {})
-                if confidence:
-                    overall_conf = confidence.get('overall', 0)
-                    st.metric("🎯 Extraction Confidence", f"{overall_conf:.1%}")
+                # Show screenshot preview if available (moved here to avoid duplication)
+                if 'view_summaries' in dashboard:
+                    view_summaries = dashboard.get('view_summaries', [])
+                    if view_summaries and len(view_summaries) > 0:
+                        first_view = view_summaries[0]
+                        if 'data' in first_view:
+                            import base64
+                            try:
+                                img_data = base64.b64decode(first_view['data'])
+                                st.image(img_data, caption=f"Preview - {first_view.get('name', 'View 1')}", use_container_width=True)
+                            except Exception as e:
+                                st.info("Screenshot preview not available")
             
             # Transparency Section - Detailed Analysis Data
             with st.expander("🔍 **Detailed Analysis Data** (Transparency)", expanded=False):
@@ -1277,19 +1278,32 @@ def render_detailed_comparison(similarity_score, processed_dashboards):
     # Side-by-side dashboard details
     st.markdown("#### 🔍 **Dashboard Details Comparison**")
     
-    # Find dashboard data from processed_dashboards or full profiles
+    # Find dashboard data from multiple possible sources
     dashboard1_data = None
     dashboard2_data = None
     
-    # First try to get from full profiles if available
-    if hasattr(st.session_state, 'full_dashboard_profiles') and st.session_state.full_dashboard_profiles:
+    # Try multiple lookup methods to ensure we find the data
+    # Method 1: Use lookup dictionaries if available
+    if hasattr(st.session_state, 'dashboard_profiles_by_name'):
+        dashboard1_data = st.session_state.dashboard_profiles_by_name.get(dashboard1_name)
+        dashboard2_data = st.session_state.dashboard_profiles_by_name.get(dashboard2_name)
+    
+    # Method 2: Try by ID if we have that mapping
+    if (not dashboard1_data or not dashboard2_data) and hasattr(st.session_state, 'dashboard_profiles_by_id'):
+        if dashboard1_id and not dashboard1_data:
+            dashboard1_data = st.session_state.dashboard_profiles_by_id.get(dashboard1_id)
+        if dashboard2_id and not dashboard2_data:
+            dashboard2_data = st.session_state.dashboard_profiles_by_id.get(dashboard2_id)
+    
+    # Method 3: Search in full profiles
+    if (not dashboard1_data or not dashboard2_data) and hasattr(st.session_state, 'full_dashboard_profiles'):
         for profile in st.session_state.full_dashboard_profiles:
-            if profile.get('dashboard_id') == dashboard1_id or profile.get('dashboard_name') == dashboard1_name:
+            if not dashboard1_data and (profile.get('dashboard_id') == dashboard1_id or profile.get('dashboard_name') == dashboard1_name):
                 dashboard1_data = profile
-            elif profile.get('dashboard_id') == dashboard2_id or profile.get('dashboard_name') == dashboard2_name:
+            elif not dashboard2_data and (profile.get('dashboard_id') == dashboard2_id or profile.get('dashboard_name') == dashboard2_name):
                 dashboard2_data = profile
     
-    # Fallback to processed_dashboards if not found in full profiles
+    # Method 4: Final fallback to processed_dashboards
     if (not dashboard1_data or not dashboard2_data) and processed_dashboards:
         for dashboard in processed_dashboards:
             if not dashboard1_data and (dashboard.get('dashboard_id') == dashboard1_id or dashboard['dashboard_name'] == dashboard1_name):
@@ -1403,8 +1417,7 @@ def render_dashboard_summary(dashboard_data, side="left"):
         kpis = dashboard_data['visual_analysis'].get('kpis', [])
         kpi_count = len(kpis)
     
-    if kpi_count > 0:
-        st.write(f"**KPIs:** {kpi_count}")
+    # Removed KPI display as backend doesn't calculate this
     
     # Metadata summary
     measures_count = 0
@@ -1423,7 +1436,28 @@ def render_dashboard_summary(dashboard_data, side="left"):
     st.write(f"**Measures:** {measures_count}")
     st.write(f"**Tables:** {tables_count}")
     
-    # Show preview image if available
+    # Show relationships if available
+    relationships_count = 0
+    if 'relationships' in dashboard_data:
+        relationships_count = len(dashboard_data['relationships'])
+    elif 'metadata_summary' in dashboard_data:
+        relationships_count = dashboard_data['metadata_summary'].get('total_relationships', 0)
+    
+    if relationships_count > 0:
+        st.write(f"**Relationships:** {relationships_count}")
+    
+    # Show complexity if available
+    if 'metadata_summary' in dashboard_data:
+        complexity = dashboard_data['metadata_summary'].get('complexity_score', 0)
+        if complexity > 0:
+            if complexity > 7:
+                st.write(f"**Complexity:** 🔴 High ({complexity:.1f}/10)")
+            elif complexity > 4:
+                st.write(f"**Complexity:** 🟡 Medium ({complexity:.1f}/10)")
+            else:
+                st.write(f"**Complexity:** 🟢 Low ({complexity:.1f}/10)")
+    
+    # Show a small screenshot preview if available
     if 'view_summaries' in dashboard_data:
         view_summaries = dashboard_data.get('view_summaries', [])
         if view_summaries and len(view_summaries) > 0:
@@ -1432,30 +1466,9 @@ def render_dashboard_summary(dashboard_data, side="left"):
                 import base64
                 try:
                     img_data = base64.b64decode(first_view['data'])
-                    st.image(img_data, caption=f"Preview", use_container_width=True)
-                except Exception as e:
+                    st.image(img_data, caption="Dashboard Preview", use_container_width=True)
+                except Exception:
                     pass
-        st.write(f"**Relationships:** {metadata.get('total_relationships', 0)}")
-        
-        complexity = metadata.get('complexity_score', 0)
-        if complexity > 7:
-            st.write(f"**Complexity:** 🔴 High ({complexity:.1f}/10)")
-        elif complexity > 4:
-            st.write(f"**Complexity:** 🟡 Medium ({complexity:.1f}/10)")
-        else:
-            st.write(f"**Complexity:** 🟢 Low ({complexity:.1f}/10)")
-    
-    # Screenshot preview (if available)
-    if 'views' in dashboard_data and dashboard_data['views']:
-        first_view = dashboard_data['views'][0]
-        if 'screenshot_data' in first_view:
-            try:
-                # Decode base64 screenshot
-                import base64
-                screenshot_data = base64.b64decode(first_view['screenshot_data'])
-                st.image(screenshot_data, caption=f"Preview: {first_view.get('view_name', 'View 1')}", use_column_width=True)
-            except Exception:
-                st.info("Screenshot preview not available")
 
 # Stage 5: Results
 # ─── ENHANCED ANALYSIS FUNCTIONS ────────────────────────────────────────────
