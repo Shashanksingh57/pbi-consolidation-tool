@@ -626,22 +626,39 @@ def render_processing():
                 dashboard_name = config['name']
                 user_provided_name = config['name'] if config['name'] != f"Dashboard {db_num}" else None
                 
-                # Update progress
+                # Update progress with more granular status
                 progress = 0.3 + (idx / total_dashboards) * 0.5
                 progress_bar.progress(progress)
-                status_text.text(f"Phase 1: Extracting profile for '{dashboard_name}' ({idx+1}/{total_dashboards})")
+                status_text.text(f"Phase 1: Processing '{dashboard_name}' ({idx+1}/{total_dashboards})...")
+                
+                # Show sub-status
+                sub_status = st.empty()
+                sub_status.info(f"📸 Processing visuals for '{dashboard_name}'...")
                 
                 # Prepare files for this specific dashboard
                 dashboard_files = []
                 file_data = st.session_state.uploaded_files.get(db_id, {})
                 
-                # Add view screenshots
+                # Add view screenshots and prepare view summaries
+                view_summaries = []
                 for i, view_file in enumerate(file_data.get('views', [])):
                     view_name = file_data.get('view_names', [f"View {i+1}"])[i]
                     new_filename = f"dashboard_{db_num}_view_{i+1}_{view_name}.{view_file.name.split('.')[-1]}"
                     dashboard_files.append((new_filename, view_file))
+                    
+                    # Store base64 encoded image for preview
+                    import base64
+                    view_file.seek(0)
+                    view_data = base64.b64encode(view_file.read()).decode('utf-8')
+                    view_summaries.append({
+                        'name': view_name,
+                        'data': view_data
+                    })
+                    view_file.seek(0)  # Reset for later use
                 
                 # Add metadata files
+                if file_data.get('metadata'):
+                    sub_status.info(f"📊 Processing metadata for '{dashboard_name}'...")
                 for metadata_file in file_data.get('metadata', []):
                     new_filename = f"dashboard_{db_num}_metadata_{metadata_file.name}"
                     dashboard_files.append((new_filename, metadata_file))
@@ -670,10 +687,13 @@ def render_processing():
                 
                 if profile_response.status_code == 200:
                     profile_data = profile_response.json()
-                    extracted_profiles.append(profile_data['profile'])
-                    st.success(f"✅ Profile extracted for '{dashboard_name}'")
+                    profile = profile_data['profile']
+                    # Add view summaries to profile
+                    profile['view_summaries'] = view_summaries
+                    extracted_profiles.append(profile)
+                    sub_status.success(f"✅ Successfully extracted profile for '{dashboard_name}'")
                 else:
-                    st.error(f"❌ Failed to extract profile for '{dashboard_name}': {profile_response.text}")
+                    sub_status.error(f"❌ Failed to extract profile for '{dashboard_name}': {profile_response.text}")
                     continue
             
             # Store extracted profiles for Phase 2
@@ -691,6 +711,7 @@ def render_processing():
                         'dashboard_name': profile.get('user_provided_name') or profile['dashboard_name'],
                         'visual_elements_count': len(profile.get('visual_elements', [])),
                         'total_pages': profile.get('total_pages', 1),
+                        'view_summaries': profile.get('view_summaries', []),  # Include view summaries
                         'metadata_summary': {
                             'total_visual_elements': len(profile.get('visual_elements', [])),
                             'total_kpi_cards': len(profile.get('kpi_cards', [])),
@@ -700,17 +721,24 @@ def render_processing():
                             'visual_types_distribution': profile.get('analysis_details', {}).get('visual_analysis_summary', {}).get('visual_types_distribution', {})
                         },
                         'extraction_confidence': profile.get('extraction_confidence', {}),
-                        'analysis_details': profile.get('analysis_details', {})
+                        'analysis_details': profile.get('analysis_details', {}),
+                        'visual_elements': profile.get('visual_elements', []),
+                        'kpi_cards': profile.get('kpi_cards', []),
+                        'filters': profile.get('filters', []),
+                        'measures': profile.get('measures', []),
+                        'tables': profile.get('tables', [])
                     })
                 
+                # Store full dashboard profiles for detailed comparison
                 st.session_state.processed_dashboards = processed_dashboards
+                st.session_state.full_dashboard_profiles = extracted_profiles  # Store complete profiles
                 progress_bar.progress(1.0)
                 status_text.text("✅ Phase 1 completed successfully!")
                 
-                st.success(f"Profile extraction complete! {len(extracted_profiles)} dashboards processed. Click below to review the results.")
-                if st.button("Review Extracted Profiles →", type="primary"):
-                    st.session_state.stage = 'review'
-                    st.rerun()
+                st.success(f"Profile extraction complete! {len(extracted_profiles)} dashboards processed.")
+                time.sleep(1)  # Brief pause to show success
+                st.session_state.stage = 'review'
+                st.rerun()
             else:
                 st.error("No dashboard profiles were successfully extracted.")
                 if st.button("← Back to File Upload", key="back_to_upload_error"):
@@ -724,9 +752,9 @@ def render_processing():
                 st.rerun()
     else:
         st.success("✅ Processing completed!")
-        if st.button("Review Results →", type="primary"):
-            st.session_state.stage = 'review'
-            st.rerun()
+        time.sleep(1)  # Brief pause to show success
+        st.session_state.stage = 'review'
+        st.rerun()
 
 # Stage 5: Review & Confirm
 def render_review():
@@ -758,17 +786,11 @@ def render_review():
     
     # Show overall summary
     total_profiles = len(st.session_state.processed_dashboards)
-    avg_confidence = 0
-    if hasattr(st.session_state, 'extracted_profiles'):
-        confidences = [profile.get('extraction_confidence', {}).get('overall', 0) for profile in st.session_state.extracted_profiles]
-        avg_confidence = sum(confidences) / len(confidences) if confidences else 0
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
         st.metric("📊 Profiles Extracted", total_profiles)
     with col2:
-        st.metric("🎯 Average Confidence", f"{avg_confidence:.1%}" if avg_confidence else "N/A")
-    with col3:
         st.metric("🔄 Ready for Phase 2", "Yes" if total_profiles > 1 else "Need 2+ dashboards")
     
     st.divider()
@@ -785,6 +807,19 @@ def render_review():
                 st.subheader("📈 Visual Analysis Summary")
                 st.metric("Total Visual Elements Found", dashboard.get('visual_elements_count', 0))
                 st.metric("Number of Views/Pages", dashboard.get('total_pages', 0))
+                
+                # Show screenshot preview if available
+                if 'view_summaries' in dashboard:
+                    view_summaries = dashboard.get('view_summaries', [])
+                    if view_summaries and len(view_summaries) > 0:
+                        first_view = view_summaries[0]
+                        if 'data' in first_view:
+                            import base64
+                            try:
+                                img_data = base64.b64decode(first_view['data'])
+                                st.image(img_data, caption=f"Preview - {first_view.get('name', 'View 1')}", use_container_width=True)
+                            except Exception as e:
+                                st.info("Screenshot preview not available")
                 
                 # Show visual types breakdown if available
                 metadata_summary = dashboard.get('metadata_summary', {})
@@ -969,9 +1004,9 @@ def render_analysis():
             render_local_analysis()
     else:
         st.success("✅ Analysis completed!")
-        if st.button("View Results →", type="primary"):
-            st.session_state.stage = 'results'
-            st.rerun()
+        time.sleep(1)  # Brief pause to show success
+        st.session_state.stage = 'results'
+        st.rerun()
 
 def render_local_analysis():
     """Handle local file-based similarity analysis using Phase 2 API"""
@@ -1038,6 +1073,16 @@ def render_local_analysis():
                 'similarity_scores': phase2_results.get('detailed_scores', []),
                 'similarity_matrix': phase2_results.get('similarity_matrix', [])
             }
+            
+            # Ensure dashboard IDs are included in similarity scores
+            for score in st.session_state.analysis_results['similarity_scores']:
+                # Extract dashboard IDs from names if not present
+                if 'dashboard1_id' not in score:
+                    for profile in st.session_state.extracted_profiles:
+                        if profile.get('dashboard_name') == score['dashboard1_name'] or profile.get('user_provided_name') == score['dashboard1_name']:
+                            score['dashboard1_id'] = profile['dashboard_id']
+                        if profile.get('dashboard_name') == score['dashboard2_name'] or profile.get('user_provided_name') == score['dashboard2_name']:
+                            score['dashboard2_id'] = profile['dashboard_id']
             progress_bar.progress(1.0)
             status_text.text("✅ Phase 2 similarity analysis completed successfully!")
             
@@ -1045,10 +1090,10 @@ def render_local_analysis():
             num_groups = len(phase2_results.get('consolidation_groups', []))
             processing_time = phase2_results.get('processing_time', 0)
             
-            st.success(f"Phase 2 Complete! Found {num_groups} consolidation groups in {processing_time:.1f}s. Click below to view detailed results.")
-            if st.button("View Consolidation Results →", type="primary"):
-                st.session_state.stage = 'results'
-                st.rerun()
+            st.success(f"Phase 2 Complete! Found {num_groups} consolidation groups in {processing_time:.1f}s.")
+            time.sleep(1)  # Brief pause to show success
+            st.session_state.stage = 'results'
+            st.rerun()
         else:
             st.error(f"Phase 2 similarity analysis failed: {response.text}")
             if st.button("← Back to Review", key="back_to_review_error"):
@@ -1139,9 +1184,9 @@ def render_api_analysis():
             status_text.text("✅ Demo analysis completed!")
             
             st.info("🔬 **Demo Mode:** This shows how API analysis would work. Real implementation would extract actual Power BI metadata.")
-            if st.button("View Demo Results →", type="primary"):
-                st.session_state.stage = 'results'
-                st.rerun()
+            time.sleep(2)  # Brief pause to show demo message
+            st.session_state.stage = 'results'
+            st.rerun()
     
     except Exception as e:
         st.error(f"Error during API analysis: {str(e)}")
@@ -1154,6 +1199,8 @@ def render_detailed_comparison(similarity_score, processed_dashboards):
     
     dashboard1_name = similarity_score['dashboard1_name']
     dashboard2_name = similarity_score['dashboard2_name']
+    dashboard1_id = similarity_score.get('dashboard1_id')
+    dashboard2_id = similarity_score.get('dashboard2_id')
     breakdown = similarity_score.get('breakdown', {})
     total_score = similarity_score['total_score']
     
@@ -1230,15 +1277,24 @@ def render_detailed_comparison(similarity_score, processed_dashboards):
     # Side-by-side dashboard details
     st.markdown("#### 🔍 **Dashboard Details Comparison**")
     
-    # Find dashboard data from processed_dashboards
+    # Find dashboard data from processed_dashboards or full profiles
     dashboard1_data = None
     dashboard2_data = None
     
-    if processed_dashboards:
+    # First try to get from full profiles if available
+    if hasattr(st.session_state, 'full_dashboard_profiles') and st.session_state.full_dashboard_profiles:
+        for profile in st.session_state.full_dashboard_profiles:
+            if profile.get('dashboard_id') == dashboard1_id or profile.get('dashboard_name') == dashboard1_name:
+                dashboard1_data = profile
+            elif profile.get('dashboard_id') == dashboard2_id or profile.get('dashboard_name') == dashboard2_name:
+                dashboard2_data = profile
+    
+    # Fallback to processed_dashboards if not found in full profiles
+    if (not dashboard1_data or not dashboard2_data) and processed_dashboards:
         for dashboard in processed_dashboards:
-            if dashboard['dashboard_name'] == dashboard1_name:
+            if not dashboard1_data and (dashboard.get('dashboard_id') == dashboard1_id or dashboard['dashboard_name'] == dashboard1_name):
                 dashboard1_data = dashboard
-            elif dashboard['dashboard_name'] == dashboard2_name:
+            elif not dashboard2_data and (dashboard.get('dashboard_id') == dashboard2_id or dashboard['dashboard_name'] == dashboard2_name):
                 dashboard2_data = dashboard
     
     col1, col2 = st.columns(2)
@@ -1315,28 +1371,70 @@ def render_dashboard_summary(dashboard_data, side="left"):
     # Basic information
     st.write(f"**Dashboard ID:** `{dashboard_data.get('dashboard_id', 'N/A')}`")
     
-    # Visual analysis summary
-    if 'visual_analysis' in dashboard_data:
-        visual_data = dashboard_data['visual_analysis']
-        st.write(f"**Total Visuals:** {visual_data.get('total_visuals', 0)}")
-        
-        # Visual types breakdown
-        visual_types = visual_data.get('visual_types', {})
-        if visual_types:
-            st.write("**Visual Types:**")
-            for vtype, count in visual_types.items():
-                st.write(f"  • {vtype}: {count}")
-        
-        # KPIs
-        kpis = visual_data.get('kpis', [])
-        if kpis:
-            st.write(f"**KPIs:** {len(kpis)}")
+    # Check different possible data structures
+    # Try to get visual elements count
+    visual_count = 0
+    if 'visual_elements' in dashboard_data:
+        visual_count = len(dashboard_data['visual_elements'])
+    elif 'visual_elements_count' in dashboard_data:
+        visual_count = dashboard_data['visual_elements_count']
+    elif 'visual_analysis' in dashboard_data:
+        visual_count = dashboard_data['visual_analysis'].get('total_visuals', 0)
+    
+    st.write(f"**Total Visuals:** {visual_count}")
+    
+    # Try to get visual types breakdown
+    visual_types = {}
+    if 'analysis_details' in dashboard_data:
+        visual_types = dashboard_data['analysis_details'].get('visual_analysis_summary', {}).get('visual_types_distribution', {})
+    elif 'visual_analysis' in dashboard_data:
+        visual_types = dashboard_data['visual_analysis'].get('visual_types', {})
+    
+    if visual_types:
+        st.write("**Visual Types:**")
+        for vtype, count in visual_types.items():
+            st.write(f"  • {vtype}: {count}")
+    
+    # KPIs
+    kpi_count = 0
+    if 'kpi_cards' in dashboard_data:
+        kpi_count = len(dashboard_data['kpi_cards'])
+    elif 'visual_analysis' in dashboard_data:
+        kpis = dashboard_data['visual_analysis'].get('kpis', [])
+        kpi_count = len(kpis)
+    
+    if kpi_count > 0:
+        st.write(f"**KPIs:** {kpi_count}")
     
     # Metadata summary
-    if 'metadata_summary' in dashboard_data:
-        metadata = dashboard_data['metadata_summary']
-        st.write(f"**Measures:** {metadata.get('total_measures', 0)}")
-        st.write(f"**Tables:** {metadata.get('total_tables', 0)}")
+    measures_count = 0
+    tables_count = 0
+    
+    if 'measures' in dashboard_data:
+        measures_count = len(dashboard_data['measures'])
+    elif 'metadata_summary' in dashboard_data:
+        measures_count = dashboard_data['metadata_summary'].get('total_measures', 0)
+        
+    if 'tables' in dashboard_data:
+        tables_count = len(dashboard_data['tables'])
+    elif 'metadata_summary' in dashboard_data:
+        tables_count = dashboard_data['metadata_summary'].get('total_tables', 0)
+    
+    st.write(f"**Measures:** {measures_count}")
+    st.write(f"**Tables:** {tables_count}")
+    
+    # Show preview image if available
+    if 'view_summaries' in dashboard_data:
+        view_summaries = dashboard_data.get('view_summaries', [])
+        if view_summaries and len(view_summaries) > 0:
+            first_view = view_summaries[0]
+            if 'data' in first_view:
+                import base64
+                try:
+                    img_data = base64.b64decode(first_view['data'])
+                    st.image(img_data, caption=f"Preview", use_container_width=True)
+                except Exception as e:
+                    pass
         st.write(f"**Relationships:** {metadata.get('total_relationships', 0)}")
         
         complexity = metadata.get('complexity_score', 0)
