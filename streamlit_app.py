@@ -707,13 +707,16 @@ def render_processing():
             if extracted_profiles:
                 # Convert profiles to the format expected by the review stage
                 processed_dashboards = []
+                # Ensure consistent naming throughout the workflow
                 for profile in extracted_profiles:
+                    display_name = profile.get('user_provided_name') or profile['dashboard_name']
                     processed_dashboards.append({
                         'dashboard_id': profile['dashboard_id'],
-                        'dashboard_name': profile.get('user_provided_name') or profile['dashboard_name'],
+                        'dashboard_name': display_name,  # Use consistent display name
+                        'user_provided_name': profile.get('user_provided_name'),  # Keep original for reference
                         'visual_elements_count': len(profile.get('visual_elements', [])),
                         'total_pages': profile.get('total_pages', 1),
-                        'view_summaries': profile.get('view_summaries', []),  # Include view summaries
+                        'view_summaries': profile.get('view_summaries', []),
                         'metadata_summary': {
                             'total_visual_elements': len(profile.get('visual_elements', [])),
                             'total_kpi_cards': len(profile.get('kpi_cards', [])),
@@ -728,7 +731,8 @@ def render_processing():
                         'kpi_cards': profile.get('kpi_cards', []),
                         'filters': profile.get('filters', []),
                         'measures': profile.get('measures', []),
-                        'tables': profile.get('tables', [])
+                        'tables': profile.get('tables', []),
+                        'relationships': profile.get('relationships', [])
                     })
                 
                 # Store full dashboard profiles for detailed comparison
@@ -738,12 +742,27 @@ def render_processing():
                 st.session_state.dashboard_profiles_by_name = {}
                 st.session_state.dashboard_profiles_by_id = {}
                 
-                # Create lookup dictionaries for easy access
-                for dashboard in processed_dashboards:
+                # Create comprehensive lookup dictionaries for easy access
+                # Map both processed dashboards AND full profiles
+                for i, dashboard in enumerate(processed_dashboards):
                     name = dashboard['dashboard_name']
                     id = dashboard['dashboard_id']
-                    st.session_state.dashboard_profiles_by_name[name] = dashboard
-                    st.session_state.dashboard_profiles_by_id[id] = dashboard
+                    # Store both processed and full profile data
+                    dashboard_with_full_data = {
+                        **dashboard,
+                        'full_profile': extracted_profiles[i] if i < len(extracted_profiles) else None
+                    }
+                    st.session_state.dashboard_profiles_by_name[name] = dashboard_with_full_data
+                    st.session_state.dashboard_profiles_by_id[id] = dashboard_with_full_data
+                
+                # Also create a mapping from original profile data
+                for profile in extracted_profiles:
+                    profile_name = profile.get('user_provided_name') or profile.get('dashboard_name')
+                    profile_id = profile.get('dashboard_id')
+                    if profile_name and profile_name not in st.session_state.dashboard_profiles_by_name:
+                        st.session_state.dashboard_profiles_by_name[profile_name] = profile
+                    if profile_id and profile_id not in st.session_state.dashboard_profiles_by_id:
+                        st.session_state.dashboard_profiles_by_id[profile_id] = profile
                 progress_bar.progress(1.0)
                 status_text.text("✅ Phase 1 completed successfully!")
                 
@@ -1078,11 +1097,12 @@ def render_local_analysis():
             # Ensure dashboard IDs are included in similarity scores
             for score in st.session_state.analysis_results['similarity_scores']:
                 # Extract dashboard IDs from names if not present
-                if 'dashboard1_id' not in score:
+                if 'dashboard1_id' not in score and hasattr(st.session_state, 'extracted_profiles'):
                     for profile in st.session_state.extracted_profiles:
-                        if profile.get('dashboard_name') == score['dashboard1_name'] or profile.get('user_provided_name') == score['dashboard1_name']:
+                        profile_name = profile.get('user_provided_name') or profile.get('dashboard_name')
+                        if profile_name == score['dashboard1_name']:
                             score['dashboard1_id'] = profile['dashboard_id']
-                        if profile.get('dashboard_name') == score['dashboard2_name'] or profile.get('user_provided_name') == score['dashboard2_name']:
+                        if profile_name == score['dashboard2_name']:
                             score['dashboard2_id'] = profile['dashboard_id']
             progress_bar.progress(1.0)
             status_text.text("✅ Phase 2 similarity analysis completed successfully!")
@@ -1278,38 +1298,60 @@ def render_detailed_comparison(similarity_score, processed_dashboards):
     # Side-by-side dashboard details
     st.markdown("#### 🔍 **Dashboard Details Comparison**")
     
-    # Find dashboard data from multiple possible sources
+    # ENHANCED: Find dashboard data with comprehensive lookup
     dashboard1_data = None
     dashboard2_data = None
     
-    # Try multiple lookup methods to ensure we find the data
-    # Method 1: Use lookup dictionaries if available
+    # Debug information
+    st.write(f"🔍 Looking for: '{dashboard1_name}' and '{dashboard2_name}'")
     if hasattr(st.session_state, 'dashboard_profiles_by_name'):
+        st.write(f"Available profiles by name: {list(st.session_state.dashboard_profiles_by_name.keys())}")
+    
+    # Method 1: Use lookup dictionaries (primary method)
+    if hasattr(st.session_state, 'dashboard_profiles_by_name') and st.session_state.dashboard_profiles_by_name:
         dashboard1_data = st.session_state.dashboard_profiles_by_name.get(dashboard1_name)
         dashboard2_data = st.session_state.dashboard_profiles_by_name.get(dashboard2_name)
+        if dashboard1_data:
+            st.write(f"✅ Found {dashboard1_name} in profiles_by_name")
+        if dashboard2_data:
+            st.write(f"✅ Found {dashboard2_name} in profiles_by_name")
     
-    # Method 2: Try by ID if we have that mapping
+    # Method 2: Try by ID lookup
     if (not dashboard1_data or not dashboard2_data) and hasattr(st.session_state, 'dashboard_profiles_by_id'):
         if dashboard1_id and not dashboard1_data:
             dashboard1_data = st.session_state.dashboard_profiles_by_id.get(dashboard1_id)
+            if dashboard1_data:
+                st.write(f"✅ Found {dashboard1_name} by ID: {dashboard1_id}")
         if dashboard2_id and not dashboard2_data:
             dashboard2_data = st.session_state.dashboard_profiles_by_id.get(dashboard2_id)
+            if dashboard2_data:
+                st.write(f"✅ Found {dashboard2_name} by ID: {dashboard2_id}")
     
-    # Method 3: Search in full profiles
-    if (not dashboard1_data or not dashboard2_data) and hasattr(st.session_state, 'full_dashboard_profiles'):
-        for profile in st.session_state.full_dashboard_profiles:
-            if not dashboard1_data and (profile.get('dashboard_id') == dashboard1_id or profile.get('dashboard_name') == dashboard1_name):
-                dashboard1_data = profile
-            elif not dashboard2_data and (profile.get('dashboard_id') == dashboard2_id or profile.get('dashboard_name') == dashboard2_name):
-                dashboard2_data = profile
-    
-    # Method 4: Final fallback to processed_dashboards
+    # Method 3: Search in processed_dashboards (direct access)
     if (not dashboard1_data or not dashboard2_data) and processed_dashboards:
+        st.write(f"Searching in processed_dashboards: {len(processed_dashboards)} items")
         for dashboard in processed_dashboards:
-            if not dashboard1_data and (dashboard.get('dashboard_id') == dashboard1_id or dashboard['dashboard_name'] == dashboard1_name):
+            dash_name = dashboard.get('dashboard_name')
+            dash_id = dashboard.get('dashboard_id')
+            if not dashboard1_data and (dash_id == dashboard1_id or dash_name == dashboard1_name):
                 dashboard1_data = dashboard
-            elif not dashboard2_data and (dashboard.get('dashboard_id') == dashboard2_id or dashboard['dashboard_name'] == dashboard2_name):
+                st.write(f"✅ Found {dashboard1_name} in processed_dashboards")
+            elif not dashboard2_data and (dash_id == dashboard2_id or dash_name == dashboard2_name):
                 dashboard2_data = dashboard
+                st.write(f"✅ Found {dashboard2_name} in processed_dashboards")
+    
+    # Method 4: Final fallback - search full profiles
+    if (not dashboard1_data or not dashboard2_data) and hasattr(st.session_state, 'full_dashboard_profiles'):
+        st.write(f"Searching in full_dashboard_profiles: {len(st.session_state.full_dashboard_profiles)} items")
+        for profile in st.session_state.full_dashboard_profiles:
+            profile_name = profile.get('user_provided_name') or profile.get('dashboard_name')
+            profile_id = profile.get('dashboard_id')
+            if not dashboard1_data and (profile_id == dashboard1_id or profile_name == dashboard1_name):
+                dashboard1_data = profile
+                st.write(f"✅ Found {dashboard1_name} in full_dashboard_profiles")
+            elif not dashboard2_data and (profile_id == dashboard2_id or profile_name == dashboard2_name):
+                dashboard2_data = profile
+                st.write(f"✅ Found {dashboard2_name} in full_dashboard_profiles")
     
     col1, col2 = st.columns(2)
     
@@ -1318,14 +1360,14 @@ def render_detailed_comparison(similarity_score, processed_dashboards):
         if dashboard1_data:
             render_dashboard_summary(dashboard1_data, side="left")
         else:
-            st.info("Dashboard details not available")
+            st.warning(f"⚠️ Dashboard details not available for '{dashboard1_name}'")
     
     with col2:
         st.markdown(f"##### 📋 **{dashboard2_name}**")
         if dashboard2_data:
             render_dashboard_summary(dashboard2_data, side="right")
         else:
-            st.info("Dashboard details not available")
+            st.warning(f"⚠️ Dashboard details not available for '{dashboard2_name}'")
     
     st.divider()
     
@@ -1382,8 +1424,10 @@ def render_detailed_comparison(similarity_score, processed_dashboards):
 def render_dashboard_summary(dashboard_data, side="left"):
     """Render summary information for a single dashboard"""
     
-    # Basic information
-    st.write(f"**Dashboard ID:** `{dashboard_data.get('dashboard_id', 'N/A')}`")
+    # Basic information - show the name that the user will recognize
+    display_name = dashboard_data.get('user_provided_name') or dashboard_data.get('dashboard_name', 'N/A')
+    st.write(f"**Name:** {display_name}")
+    st.write(f"**ID:** `{dashboard_data.get('dashboard_id', 'N/A')}`")
     
     # Check different possible data structures
     # Try to get visual elements count
