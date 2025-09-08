@@ -3,13 +3,17 @@
 import os
 import io
 import json
+import re
 import requests
+import shutil
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from typing import List, Dict, Any
 from datetime import datetime
+from pathlib import Path
+import time
 
 # Configure page
 st.set_page_config(
@@ -55,9 +59,180 @@ def load_custom_css():
         background-color: #0C62FB;
     }
     
+    .detailed-analysis-box {
+        background-color: #f8f9fa;
+        border-left: 4px solid #0C62FB;
+        padding: 1rem;
+        border-radius: 4px;
+        margin: 0.5rem 0;
+    }
+    
+    .confidence-score {
+        display: inline-block;
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        font-weight: bold;
+    }
+    
+    .confidence-high { background-color: #d4edda; color: #155724; }
+    .confidence-medium { background-color: #fff3cd; color: #856404; }
+    .confidence-low { background-color: #f8d7da; color: #721c24; }
+    
+    .visual-element-card {
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 0.75rem;
+        margin: 0.25rem 0;
+        background-color: #ffffff;
+    }
+    
     /* Removed visibility hidden styles that might cause blank page */
     </style>
     """, unsafe_allow_html=True)
+
+# ─── OUTPUT MANAGEMENT FUNCTIONS ───────────────────────────────────────────────
+
+def create_run_directory(execution_mode: str) -> Path:
+    """Create a unique timestamped directory for this run"""
+    base_dir = Path("/Users/shashank.singh/Library/CloudStorage/OneDrive-Slalom/Desktop/AI PBI Consolidation Test Cases Review")
+    
+    # Create base directory if it doesn't exist
+    base_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create timestamped run directory
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    mode_suffix = execution_mode.replace(" ", "").replace("&", "")
+    run_dir = base_dir / f"Run_{timestamp}_{mode_suffix}"
+    
+    # Create directory structure
+    run_dir.mkdir(exist_ok=True)
+    (run_dir / "profiles").mkdir(exist_ok=True)
+    (run_dir / "analysis_details").mkdir(exist_ok=True)
+    (run_dir / "screenshots").mkdir(exist_ok=True)
+    (run_dir / "confidence_reports").mkdir(exist_ok=True)
+    (run_dir / "logs").mkdir(exist_ok=True)
+    
+    if "Compare" in execution_mode:
+        (run_dir / "similarity_analysis").mkdir(exist_ok=True)
+        (run_dir / "recommendations").mkdir(exist_ok=True)
+        (run_dir / "reports").mkdir(exist_ok=True)
+    
+    return run_dir
+
+def run_pre_execution_checks(execution_mode: str, processed_dashboards: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Run comprehensive pre-execution validation and setup"""
+    checks_result = {
+        "success": True,
+        "warnings": [],
+        "errors": [],
+        "info": []
+    }
+    
+    # 1. API Connectivity Check
+    try:
+        API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+        API_KEY = os.getenv("API_KEY", "supersecrettoken123")
+        response = requests.get(f"{API_BASE_URL}/", headers={"Authorization": f"Bearer {API_KEY}"}, timeout=5)
+        if response.status_code == 200:
+            checks_result["info"].append("✅ Backend API connectivity verified")
+        else:
+            checks_result["errors"].append(f"❌ Backend API returned status {response.status_code}")
+            checks_result["success"] = False
+    except Exception as e:
+        checks_result["errors"].append(f"❌ Cannot connect to backend API: {str(e)}")
+        checks_result["success"] = False
+    
+    # 2. OpenAI API Check (for Extract mode)
+    if "Extract" in execution_mode or "Full" in execution_mode:
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if openai_key:
+            checks_result["info"].append("✅ OpenAI API key configured")
+        else:
+            checks_result["warnings"].append("⚠️ OpenAI API key not found - visual analysis may fail")
+    
+    # 3. Storage Space Check
+    try:
+        base_path = "/Users/shashank.singh/Library/CloudStorage/OneDrive-Slalom/Desktop/AI PBI Consolidation Test Cases Review"
+        free_space_gb = shutil.disk_usage(base_path)[2] / (1024**3)
+        if free_space_gb > 1:
+            checks_result["info"].append(f"✅ Available disk space: {free_space_gb:.1f} GB")
+        else:
+            checks_result["warnings"].append(f"⚠️ Low disk space: {free_space_gb:.1f} GB")
+    except Exception as e:
+        checks_result["warnings"].append(f"⚠️ Cannot check disk space: {str(e)}")
+    
+    # 4. Profile Data Check (for Compare mode)
+    if "Compare" in execution_mode and not "Full" in execution_mode:
+        if hasattr(st.session_state, 'extracted_profiles') and st.session_state.extracted_profiles:
+            profile_count = len(st.session_state.extracted_profiles)
+            if profile_count >= 2:
+                checks_result["info"].append(f"✅ Found {profile_count} profiles ready for comparison")
+            else:
+                checks_result["errors"].append("❌ Need at least 2 profiles for comparison")
+                checks_result["success"] = False
+        else:
+            checks_result["errors"].append("❌ No extracted profiles found - run Extract & Profile first")
+            checks_result["success"] = False
+    
+    # 5. Input File Validation (for Extract mode)
+    if "Extract" in execution_mode or "Full" in execution_mode:
+        if hasattr(st.session_state, 'uploaded_files') and st.session_state.uploaded_files:
+            file_count = sum(len(data.get('views', []) + data.get('metadata', []))
+                           for data in st.session_state.uploaded_files.values())
+            checks_result["info"].append(f"✅ Found {file_count} files ready for processing")
+        else:
+            checks_result["errors"].append("❌ No uploaded files found")
+            checks_result["success"] = False
+    
+    # Convert to expected format for UI
+    ui_checks = {}
+    
+    # Convert errors to failed checks
+    for i, error in enumerate(checks_result["errors"]):
+        ui_checks[f"Error {i+1}"] = {"passed": False, "message": error}
+    
+    # Convert info to passed checks
+    for i, info in enumerate(checks_result["info"]):
+        ui_checks[f"Check {i+1}"] = {"passed": True, "message": info}
+    
+    # Convert warnings to passed checks with warning message
+    for i, warning in enumerate(checks_result["warnings"]):
+        ui_checks[f"Warning {i+1}"] = {"passed": True, "message": warning}
+    
+    return ui_checks
+
+def export_profiles_to_directory(output_dir: Path, processed_dashboards: List[Dict[str, Any]]) -> None:
+    """Export dashboard profiles to JSON files in the specified directory"""
+    try:
+        # Create profiles subdirectory
+        profiles_dir = output_dir / "profiles"
+        profiles_dir.mkdir(exist_ok=True)
+        
+        # Export each dashboard profile
+        for dashboard in processed_dashboards:
+            dashboard_name = dashboard.get('dashboard_name', 'Unknown')
+            safe_name = re.sub(r'[^\w\-_]', '_', dashboard_name)
+            
+            profile_file = profiles_dir / f"{safe_name}_profile.json"
+            with open(profile_file, 'w', encoding='utf-8') as f:
+                json.dump(dashboard, f, indent=2, default=str)
+        
+        # Create summary file
+        summary = {
+            "export_timestamp": datetime.now().isoformat(),
+            "total_profiles": len(processed_dashboards),
+            "dashboard_names": [d.get('dashboard_name', 'Unknown') for d in processed_dashboards],
+            "export_mode": "Extract & Profile Only"
+        }
+        
+        summary_file = output_dir / "export_summary.json"
+        with open(summary_file, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, indent=2, default=str)
+            
+        st.info(f"📁 Exported {len(processed_dashboards)} profiles to {profiles_dir}")
+        
+    except Exception as e:
+        st.error(f"Failed to export profiles: {str(e)}")
 
 # Session state initialization
 def init_session_state():
@@ -243,33 +418,39 @@ def render_dashboard_config():
     
     # Configure views for each dashboard
     st.subheader("📋 Configure Views for Each Dashboard")
+    st.write("**Give your dashboards meaningful names instead of 'Dashboard 1', 'Dashboard 2':**")
     
     dashboard_config = {}
     
     for i in range(1, num_dashboards + 1):
-        with st.expander(f"Dashboard {i} Configuration", expanded=True):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                name = st.text_input(
-                    f"Dashboard {i} Name",
-                    value=f"Dashboard {i}",
-                    key=f"dashboard_{i}_name"
-                )
-            
-            with col2:
-                num_views = st.number_input(
-                    f"Number of Views for Dashboard {i}",
-                    min_value=1,
-                    max_value=20,
-                    value=1,
-                    key=f"dashboard_{i}_views"
-                )
-            
-            dashboard_config[f"dashboard_{i}"] = {
-                'name': name,
-                'views': num_views
-            }
+        st.markdown(f"### Dashboard {i} Configuration")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            name = st.text_input(
+                f"📊 Dashboard {i} Name",
+                value=f"Dashboard {i}",
+                key=f"dashboard_{i}_name",
+                help=f"Enter a descriptive name like 'Sales Performance Dashboard' or 'Financial KPIs'"
+            )
+        
+        with col2:
+            num_views = st.number_input(
+                f"Number of Views",
+                min_value=1,
+                max_value=20,
+                value=1,
+                key=f"dashboard_{i}_views",
+                help="How many screenshot pages for this dashboard?"
+            )
+        
+        dashboard_config[f"dashboard_{i}"] = {
+            'name': name,
+            'views': num_views
+        }
+        
+        st.markdown("---")
     
     st.session_state.dashboard_config = dashboard_config
     
@@ -386,7 +567,7 @@ def render_file_upload():
 
 # Stage 4: Processing
 def render_processing():
-    st.header("⚡ Processing Dashboards")
+    st.header("⚡ Phase 1: Dashboard Profile Extraction")
     
     if not st.session_state.processed_dashboards:
         st.write("Processing your dashboards to extract visual and metadata information...")
@@ -433,32 +614,105 @@ def render_processing():
             # Add dashboard names as form data
             dashboard_info_json = json.dumps({'dashboard_names': dashboard_names})
             
-            progress_bar.progress(0.6)
-            status_text.text("Analyzing visual elements and metadata...")
+            progress_bar.progress(0.3)
+            status_text.text("Phase 1: Extracting dashboard profiles...")
             
-            response = requests.post(
-                f"{API_BASE_URL}/api/v1/process-dashboards",
-                files=files,
-                data={'dashboard_info': dashboard_info_json},
-                headers={"Authorization": f"Bearer {API_KEY}"},
-                timeout=300
-            )
+            # Process each dashboard individually using Phase 1 API
+            extracted_profiles = []
+            total_dashboards = len(st.session_state.dashboard_config)
+            
+            for idx, (db_id, config) in enumerate(st.session_state.dashboard_config.items()):
+                db_num = db_id.split('_')[1]
+                dashboard_name = config['name']
+                user_provided_name = config['name'] if config['name'] != f"Dashboard {db_num}" else None
+                
+                # Update progress
+                progress = 0.3 + (idx / total_dashboards) * 0.5
+                progress_bar.progress(progress)
+                status_text.text(f"Phase 1: Extracting profile for '{dashboard_name}' ({idx+1}/{total_dashboards})")
+                
+                # Prepare files for this specific dashboard
+                dashboard_files = []
+                file_data = st.session_state.uploaded_files.get(db_id, {})
+                
+                # Add view screenshots
+                for i, view_file in enumerate(file_data.get('views', [])):
+                    view_name = file_data.get('view_names', [f"View {i+1}"])[i]
+                    new_filename = f"dashboard_{db_num}_view_{i+1}_{view_name}.{view_file.name.split('.')[-1]}"
+                    dashboard_files.append((new_filename, view_file))
+                
+                # Add metadata files
+                for metadata_file in file_data.get('metadata', []):
+                    new_filename = f"dashboard_{db_num}_metadata_{metadata_file.name}"
+                    dashboard_files.append((new_filename, metadata_file))
+                
+                # Create files list for this dashboard
+                files_list = []
+                for filename, file_obj in dashboard_files:
+                    files_list.append(('files', (filename, file_obj.getvalue(), file_obj.type)))
+                
+                # Prepare request data as JSON string
+                request_data = {
+                    'dashboard_id': f"dashboard_{db_num}",
+                    'dashboard_name': dashboard_name,
+                    'user_provided_name': user_provided_name,
+                    'include_analysis_details': True
+                }
+                
+                # Call Phase 1 API for individual dashboard
+                profile_response = requests.post(
+                    f"{API_BASE_URL}/api/v1/extract-profile",
+                    files=files_list,
+                    params={'request_data': json.dumps(request_data)},
+                    headers={"Authorization": f"Bearer {API_KEY}"},
+                    timeout=300
+                )
+                
+                if profile_response.status_code == 200:
+                    profile_data = profile_response.json()
+                    extracted_profiles.append(profile_data['profile'])
+                    st.success(f"✅ Profile extracted for '{dashboard_name}'")
+                else:
+                    st.error(f"❌ Failed to extract profile for '{dashboard_name}': {profile_response.text}")
+                    continue
+            
+            # Store extracted profiles for Phase 2
+            st.session_state.extracted_profiles = extracted_profiles
             
             progress_bar.progress(0.9)
             status_text.text("Finalizing results...")
             
-            if response.status_code == 200:
-                result = response.json()
-                st.session_state.processed_dashboards = result['data']['dashboards']
-                progress_bar.progress(1.0)
-                status_text.text("✅ Processing completed successfully!")
+            if extracted_profiles:
+                # Convert profiles to the format expected by the review stage
+                processed_dashboards = []
+                for profile in extracted_profiles:
+                    processed_dashboards.append({
+                        'dashboard_id': profile['dashboard_id'],
+                        'dashboard_name': profile.get('user_provided_name') or profile['dashboard_name'],
+                        'visual_elements_count': len(profile.get('visual_elements', [])),
+                        'total_pages': profile.get('total_pages', 1),
+                        'metadata_summary': {
+                            'total_visual_elements': len(profile.get('visual_elements', [])),
+                            'total_kpi_cards': len(profile.get('kpi_cards', [])),
+                            'total_filters': len(profile.get('filters', [])),
+                            'measure_count': len(profile.get('measures', [])),
+                            'table_count': len(profile.get('tables', [])),
+                            'visual_types_distribution': profile.get('analysis_details', {}).get('visual_analysis_summary', {}).get('visual_types_distribution', {})
+                        },
+                        'extraction_confidence': profile.get('extraction_confidence', {}),
+                        'analysis_details': profile.get('analysis_details', {})
+                    })
                 
-                st.success("Dashboard processing complete! Click below to review the results.")
-                if st.button("Review Results →", type="primary"):
+                st.session_state.processed_dashboards = processed_dashboards
+                progress_bar.progress(1.0)
+                status_text.text("✅ Phase 1 completed successfully!")
+                
+                st.success(f"Profile extraction complete! {len(extracted_profiles)} dashboards processed. Click below to review the results.")
+                if st.button("Review Extracted Profiles →", type="primary"):
                     st.session_state.stage = 'review'
                     st.rerun()
             else:
-                st.error(f"Processing failed: {response.text}")
+                st.error("No dashboard profiles were successfully extracted.")
                 if st.button("← Back to File Upload", key="back_to_upload_error"):
                     st.session_state.stage = 'file_upload'
                     st.rerun()
@@ -482,7 +736,42 @@ def render_review():
         st.error("No processed dashboards found. Please go back and process your dashboards first.")
         return
     
-    st.write("Review the extracted information from each dashboard before running similarity analysis:")
+    st.write("📋 **Extract & Profile Complete!** Review the extracted profiles and choose your next step:")
+    
+    # Execution Mode Selection
+    st.subheader("🎯 Choose Analysis Mode")
+    
+    execution_mode = st.radio(
+        "Select what you want to execute:",
+        options=[
+            "Compare & Recommend Only",
+            "Full Re-Analysis", 
+            "Export Profiles Only"
+        ],
+        format_func=lambda x: {
+            "Compare & Recommend Only": "🔍 **Compare & Recommend** - Find similarities using current profiles",
+            "Full Re-Analysis": "🔄 **Full Re-Analysis** - Re-extract profiles + find similarities", 
+            "Export Profiles Only": "📁 **Export Profiles** - Save current profiles to files"
+        }[x],
+        help="Choose your execution mode based on what you want to accomplish"
+    )
+    
+    # Show overall summary
+    total_profiles = len(st.session_state.processed_dashboards)
+    avg_confidence = 0
+    if hasattr(st.session_state, 'extracted_profiles'):
+        confidences = [profile.get('extraction_confidence', {}).get('overall', 0) for profile in st.session_state.extracted_profiles]
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("📊 Profiles Extracted", total_profiles)
+    with col2:
+        st.metric("🎯 Average Confidence", f"{avg_confidence:.1%}" if avg_confidence else "N/A")
+    with col3:
+        st.metric("🔄 Ready for Phase 2", "Yes" if total_profiles > 1 else "Need 2+ dashboards")
+    
+    st.divider()
     
     dashboards = st.session_state.processed_dashboards
     
@@ -517,14 +806,55 @@ def render_review():
             
             with col2:
                 st.subheader("🗂️ Metadata Summary")
-                st.metric("Measures Found", dashboard.get('measures_count', 0))
-                st.metric("Tables Found", dashboard.get('tables_count', 0))
-                st.metric("Relationships Found", dashboard.get('relationships_count', 0))
+                st.metric("Measures Found", metadata_summary.get('measure_count', 0))
+                st.metric("Tables Found", metadata_summary.get('table_count', 0))
+                st.metric("KPI Cards", metadata_summary.get('total_kpi_cards', 0))
+                st.metric("Filters", metadata_summary.get('total_filters', 0))
                 
-                # Show complexity if available
-                if metadata_summary.get('complexity_score'):
-                    complexity = metadata_summary['complexity_score']
-                    st.metric("Complexity Score", f"{complexity:.1f}/10")
+                # Show extraction confidence
+                confidence = dashboard.get('extraction_confidence', {})
+                if confidence:
+                    overall_conf = confidence.get('overall', 0)
+                    st.metric("🎯 Extraction Confidence", f"{overall_conf:.1%}")
+            
+            # Transparency Section - Detailed Analysis Data
+            with st.expander("🔍 **Detailed Analysis Data** (Transparency)", expanded=False):
+                analysis_details = dashboard.get('analysis_details', {})
+                
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.subheader("📊 GPT-4 Vision Analysis")
+                    visual_summary = analysis_details.get('visual_analysis_summary', {})
+                    if visual_summary:
+                        st.json(visual_summary)
+                    else:
+                        st.write("No detailed visual analysis data available")
+                
+                with col_b:
+                    st.subheader("🧮 DAX Analysis Metrics") 
+                    dax_metrics = analysis_details.get('dax_complexity_metrics', {})
+                    if dax_metrics:
+                        st.json(dax_metrics)
+                    else:
+                        st.write("No DAX complexity metrics available")
+                
+                st.subheader("📋 Raw Extraction Data")
+                raw_data = analysis_details.get('raw_visual_extraction', [])
+                if raw_data:
+                    st.write(f"Found {len(raw_data)} raw visual elements:")
+                    for i, element in enumerate(raw_data[:3]):  # Show first 3
+                        with st.expander(f"Element {i+1}: {element.get('visual_type', 'Unknown')}", expanded=False):
+                            st.json(element)
+                    if len(raw_data) > 3:
+                        st.write(f"... and {len(raw_data) - 3} more elements")
+                else:
+                    st.write("No raw extraction data available")
+                
+                # Processing metadata
+                processing_meta = analysis_details.get('processing_metadata', {})
+                if processing_meta:
+                    st.subheader("⚙️ Processing Metadata")
+                    st.json(processing_meta)
             
             # Screenshot Previews
             if dashboard.get('view_summaries'):
@@ -565,9 +895,26 @@ def render_review():
         st.metric("Total Measures", total_measures)
     
     if total_dashboards >= 2:
-        st.success(f"✅ Ready to analyze {total_dashboards} dashboards for similarity!")
+        st.success(f"✅ Phase 1 Complete! Ready to run Phase 2 similarity scoring on {total_dashboards} profiles.")
     else:
-        st.warning("⚠️ Need at least 2 dashboards for similarity comparison.")
+        st.warning("⚠️ Need at least 2 dashboard profiles for Phase 2 similarity comparison.")
+    
+    # Pre-execution validation
+    st.divider()
+    st.subheader("🔍 Pre-Execution Validation")
+    
+    # Run validation checks
+    validation_results = run_pre_execution_checks(execution_mode, st.session_state.processed_dashboards)
+    
+    # Display validation results
+    for check, result in validation_results.items():
+        if result["passed"]:
+            st.success(f"✅ {check}: {result['message']}")
+        else:
+            st.error(f"❌ {check}: {result['message']}")
+    
+    # Check if all validations passed
+    all_checks_passed = all(result["passed"] for result in validation_results.values())
     
     # Navigation
     col1, col2 = st.columns(2)
@@ -577,23 +924,48 @@ def render_review():
             st.rerun()
     
     with col2:
-        can_proceed = total_dashboards >= 2
-        if st.button("Confirm and Run Similarity Analysis →", type="primary", disabled=not can_proceed, key="run_similarity"):
-            st.session_state.stage = 'analysis'
-            st.rerun()
+        button_disabled = not all_checks_passed
+        
+        if execution_mode == "Export Profiles Only":
+            if st.button("📁 Export Profiles", type="primary", disabled=button_disabled, key="export_profiles"):
+                # Create output directory
+                output_dir = create_run_directory(execution_mode)
+                
+                # Export profiles to the directory
+                export_profiles_to_directory(output_dir, st.session_state.processed_dashboards)
+                
+                st.success(f"✅ Profiles exported to: {output_dir}")
+                
+        elif execution_mode == "Compare & Recommend Only":
+            if st.button("🔍 Compare & Recommend →", type="primary", disabled=button_disabled, key="run_comparison"):
+                # Create output directory
+                st.session_state.output_dir = create_run_directory(execution_mode)
+                st.session_state.stage = 'analysis'
+                st.rerun()
+                
+        elif execution_mode == "Full Re-Analysis":
+            if st.button("🔄 Re-Analyze Everything →", type="primary", disabled=button_disabled, key="run_full_analysis"):
+                # Create output directory
+                st.session_state.output_dir = create_run_directory(execution_mode)
+                # Reset processing state to force re-analysis
+                st.session_state.processed_dashboards = []
+                st.session_state.extracted_profiles = []
+                st.session_state.analysis_results = {}
+                st.session_state.stage = 'processing'
+                st.rerun()
 
-# Stage 6: Analysis
+# Stage 6: Analysis (Phase 2)
 def render_analysis():
-    st.header("🔄 Running Analysis")
+    st.header("🔄 Phase 2: Similarity Scoring")
     
     if not st.session_state.analysis_results:
         analysis_method = st.session_state.get('analysis_method', 'Local Batch Analysis')
         
         if analysis_method == "REST API Analysis":
-            st.write("Analyzing your selected reports using automated Power BI API extraction...")
+            st.write("Running Phase 2 on your selected reports using automated similarity algorithms...")
             render_api_analysis()
         else:
-            st.write("Analyzing your dashboards using AI-powered comparison...")
+            st.write("🧮 **Phase 2**: Running mathematical similarity comparison on extracted profiles...")
             render_local_analysis()
     else:
         st.success("✅ Analysis completed!")
@@ -602,48 +974,53 @@ def render_analysis():
             st.rerun()
 
 def render_local_analysis():
-    """Handle local file-based similarity analysis"""
+    """Handle local file-based similarity analysis using Phase 2 API"""
     progress_bar = st.progress(0)
     status_text = st.empty()
     
     try:
-        # Check if we have processed dashboards from previous stage
-        if not st.session_state.processed_dashboards:
-            st.error("No processed dashboard data found. Please go back and complete the processing stage.")
+        # Check if we have extracted profiles from Phase 1
+        if not hasattr(st.session_state, 'extracted_profiles') or not st.session_state.extracted_profiles:
+            st.error("No extracted profiles found from Phase 1. Please go back and complete the profile extraction stage.")
             if st.button("← Back to Review", key="back_to_review_error"):
                 st.session_state.stage = 'review'
                 st.rerun()
             return
         
         progress_bar.progress(0.2)
-        status_text.text("Initializing similarity analysis...")
+        status_text.text("Phase 2: Initializing similarity scoring...")
         
-        # Extract dashboard IDs and names from processed data
-        dashboard_data = []
-        for dashboard in st.session_state.processed_dashboards:
-            dashboard_data.append({
-                'dashboard_id': dashboard['dashboard_id'],
-                'dashboard_name': dashboard['dashboard_name']
-            })
+        # Extract profile IDs from extracted profiles
+        profile_ids = [profile['dashboard_id'] for profile in st.session_state.extracted_profiles]
+        
+        if len(profile_ids) < 2:
+            st.error("Need at least 2 profiles for similarity analysis.")
+            if st.button("← Back to Review", key="back_insufficient"):
+                st.session_state.stage = 'review'
+                st.rerun()
+            return
         
         progress_bar.progress(0.5)
-        status_text.text("Running similarity analysis...")
+        status_text.text(f"Phase 2: Running similarity analysis on {len(profile_ids)} profiles...")
         
-        # Call the new similarity analysis API
+        # Call the Phase 2 scoring API
         API_KEY = os.getenv("API_KEY", "supersecrettoken123")
         API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
         
         response = requests.post(
-            f"{API_BASE_URL}/api/v1/run-similarity",
+            f"{API_BASE_URL}/api/v1/score-profiles",
             json={
-                'dashboards': dashboard_data,
-                'similarity_threshold': 0.7,
-                'weights': {
-                    'measures': 0.4,
-                    'visuals': 0.3,
-                    'data_model': 0.2,
-                    'layout': 0.1
-                }
+                'profile_ids': profile_ids,
+                'similarity_config': {
+                    'similarity_threshold': 0.7,
+                    'weights': {
+                        'measures': 0.4,
+                        'visuals': 0.3,
+                        'data_model': 0.2,
+                        'layout': 0.1
+                    }
+                },
+                'include_detailed_breakdown': True
             },
             headers={"Authorization": f"Bearer {API_KEY}"},
             timeout=300
@@ -653,16 +1030,27 @@ def render_local_analysis():
         status_text.text("Processing similarity results...")
         
         if response.status_code == 200:
-            st.session_state.analysis_results = response.json()
+            phase2_results = response.json()
+            # Store both Phase 2 results and original results format for compatibility
+            st.session_state.analysis_results = {
+                'phase2_results': phase2_results,
+                'consolidated_groups': phase2_results.get('consolidation_groups', []),
+                'similarity_scores': phase2_results.get('detailed_scores', []),
+                'similarity_matrix': phase2_results.get('similarity_matrix', [])
+            }
             progress_bar.progress(1.0)
-            status_text.text("✅ Similarity analysis completed successfully!")
+            status_text.text("✅ Phase 2 similarity analysis completed successfully!")
             
-            st.success("Analysis completed! Click below to view results.")
-            if st.button("View Results →", type="primary"):
+            # Show quick summary
+            num_groups = len(phase2_results.get('consolidation_groups', []))
+            processing_time = phase2_results.get('processing_time', 0)
+            
+            st.success(f"Phase 2 Complete! Found {num_groups} consolidation groups in {processing_time:.1f}s. Click below to view detailed results.")
+            if st.button("View Consolidation Results →", type="primary"):
                 st.session_state.stage = 'results'
                 st.rerun()
         else:
-            st.error(f"Similarity analysis failed: {response.text}")
+            st.error(f"Phase 2 similarity analysis failed: {response.text}")
             if st.button("← Back to Review", key="back_to_review_error"):
                 st.session_state.stage = 'review'
                 st.rerun()
@@ -972,6 +1360,168 @@ def render_dashboard_summary(dashboard_data, side="left"):
                 st.info("Screenshot preview not available")
 
 # Stage 5: Results
+# ─── ENHANCED ANALYSIS FUNCTIONS ────────────────────────────────────────────
+
+def get_confidence_badge(score):
+    """Generate confidence score badge HTML"""
+    if score >= 0.8:
+        return '<span class="confidence-score confidence-high">High Confidence</span>'
+    elif score >= 0.6:
+        return '<span class="confidence-score confidence-medium">Medium Confidence</span>'
+    else:
+        return '<span class="confidence-score confidence-low">Low Confidence</span>'
+
+def render_detailed_dashboard_analysis(dashboard_id: str):
+    """Render detailed analysis for a specific dashboard"""
+    try:
+        API_KEY = os.getenv("API_KEY", "supersecrettoken123")
+        API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+        
+        # Get detailed profile information
+        response = requests.get(
+            f"{API_BASE_URL}/api/v1/profiles/{dashboard_id}/details",
+            headers={"Authorization": f"Bearer {API_KEY}"}
+        )
+        
+        if response.status_code == 200:
+            details = response.json()
+            profile = details['profile']
+            
+            st.markdown(f"""
+            <div class="detailed-analysis-box">
+                <h4>🔍 Detailed Analysis: {profile.get('user_provided_name', profile.get('dashboard_name', 'Unknown Dashboard'))}</h4>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Analysis confidence scores
+            confidence_scores = details.get('confidence_scores', {})
+            if confidence_scores:
+                st.subheader("📊 Analysis Confidence")
+                cols = st.columns(len(confidence_scores))
+                for i, (phase, score) in enumerate(confidence_scores.items()):
+                    with cols[i]:
+                        st.metric(
+                            phase.replace('_', ' ').title(),
+                            f"{score*100:.1f}%",
+                            help=f"Confidence in the {phase.replace('_', ' ')} extraction"
+                        )
+            
+            # Visual Elements Breakdown
+            visual_breakdown = details.get('visual_breakdown', {})
+            if visual_breakdown.get('raw_elements'):
+                st.subheader("🎨 Visual Elements Detected by GPT-4 Vision")
+                
+                # Summary metrics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Elements", visual_breakdown['total_elements'])
+                with col2:
+                    st.metric("Element Types", len(visual_breakdown['elements_by_type']))
+                with col3:
+                    complexity = min(visual_breakdown['total_elements'] / 10, 1.0)
+                    st.metric("Visual Complexity", f"{complexity:.2f}")
+                
+                # Element type distribution
+                if visual_breakdown['elements_by_type']:
+                    st.write("**Visual Element Distribution:**")
+                    element_types = visual_breakdown['elements_by_type']
+                    
+                    # Create bar chart
+                    if element_types:
+                        fig = px.bar(
+                            x=list(element_types.keys()),
+                            y=list(element_types.values()),
+                            title="Visual Elements by Type",
+                            labels={'x': 'Element Type', 'y': 'Count'},
+                            color_discrete_sequence=['#0C62FB']
+                        )
+                        fig.update_layout(height=300)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                # Detailed element list (expandable)
+                with st.expander("🔍 Raw Visual Elements (GPT-4 Vision Analysis)", expanded=False):
+                    for i, element in enumerate(visual_breakdown['raw_elements']):
+                        st.markdown(f"""
+                        <div class="visual-element-card">
+                            <strong>Element {i+1}: {element.get('visual_type', 'Unknown').title()}</strong><br>
+                            <em>Title:</em> {element.get('title', 'No title detected')}<br>
+                            <em>Page:</em> {element.get('page_name', 'Unknown page')}<br>
+                            <em>Data Fields:</em> {', '.join(element.get('data_fields', [])) or 'None detected'}<br>
+                            <em>Position:</em> {element.get('position', 'Not specified')}
+                        </div>
+                        """, unsafe_allow_html=True)
+            
+            # Data Model Breakdown
+            data_model = details.get('data_model_breakdown', {})
+            if data_model:
+                st.subheader("🏗️ Data Model Analysis")
+                
+                # Measures analysis
+                measures = data_model.get('measures', [])
+                if measures:
+                    st.write(f"**📈 DAX Measures ({len(measures)} found):**")
+                    with st.expander("View All Measures", expanded=False):
+                        for measure in measures[:10]:  # Show first 10
+                            st.markdown(f"""
+                            **{measure.get('measure_name', 'Unknown')}**
+                            - Table: {measure.get('table_name', 'Unknown')}
+                            - Formula: `{measure.get('dax_formula', 'No formula')[:100]}...`
+                            """)
+                        if len(measures) > 10:
+                            st.write(f"... and {len(measures) - 10} more measures")
+                
+                # Tables analysis
+                tables = data_model.get('tables', [])
+                if tables:
+                    st.write(f"**📋 Data Tables ({len(tables)} found):**")
+                    table_data = []
+                    for table in tables:
+                        table_data.append({
+                            'Table Name': table.get('table_name', 'Unknown'),
+                            'Columns': table.get('column_count', 0),
+                            'Rows': table.get('row_count', 'Unknown'),
+                            'Type': table.get('table_type', 'Unknown')
+                        })
+                    
+                    if table_data:
+                        df_tables = pd.DataFrame(table_data)
+                        st.dataframe(df_tables, use_container_width=True)
+                
+                # Relationships analysis
+                relationships = data_model.get('relationships', [])
+                if relationships:
+                    st.write(f"**🔗 Relationships ({len(relationships)} found):**")
+                    with st.expander("View Relationships", expanded=False):
+                        for rel in relationships:
+                            st.write(f"• {rel.get('from_table', 'Unknown')}.{rel.get('from_column', 'Unknown')} → {rel.get('to_table', 'Unknown')}.{rel.get('to_column', 'Unknown')} ({rel.get('relationship_type', 'Unknown')})")
+            
+            # Processing metadata
+            analysis_details = details.get('analysis_details', {})
+            if analysis_details:
+                with st.expander("⚙️ Processing Information", expanded=False):
+                    processing_meta = analysis_details.get('processing_metadata', {})
+                    if processing_meta:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**Processing Time:** {processing_meta.get('total_processing_time', 0):.2f}s")
+                            st.write(f"**Analysis Version:** {processing_meta.get('analysis_model_version', 'Unknown')}")
+                        with col2:
+                            st.write(f"**Timestamp:** {processing_meta.get('extraction_timestamp', 'Unknown')}")
+                            
+                    # Complexity metrics
+                    dax_metrics = analysis_details.get('dax_complexity_metrics', {})
+                    if dax_metrics:
+                        st.write("**DAX Complexity Metrics:**")
+                        complexity_indicators = dax_metrics.get('complexity_indicators', {})
+                        for metric, value in complexity_indicators.items():
+                            st.write(f"• {metric.replace('_', ' ').title()}: {value}")
+        
+        else:
+            st.error(f"Could not load detailed analysis: {response.status_code}")
+            
+    except Exception as e:
+        st.error(f"Error loading detailed analysis: {str(e)}")
+
 def render_results():
     st.header("📈 Analysis Results")
     
@@ -986,21 +1536,71 @@ def render_results():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Dashboards Analyzed", results['data'].get('dashboards_processed', 0))
+        st.metric("Dashboards Analyzed", results.get('data', {}).get('dashboards_processed', 0))
     with col2:
-        st.metric("Total Views", results['data'].get('total_views', 0))
+        st.metric("Total Views", results.get('data', {}).get('total_views', 0))
     with col3:
-        st.metric("Similarity Pairs", results['data'].get('similarity_pairs', 0))
+        st.metric("Similarity Pairs", results.get('data', {}).get('similarity_pairs', 0))
     with col4:
-        st.metric("Consolidation Groups", results['data'].get('consolidation_groups', 0))
+        st.metric("Consolidation Groups", results.get('data', {}).get('consolidation_groups', 0))
+    
+    st.divider()
+    
+    # Enhanced Dashboard Profiles Section with Detailed Analysis
+    st.subheader("🔍 Dashboard Analysis Details")
+    st.write("Click on any dashboard below to view the detailed AI analysis including extracted visual elements, measures, and confidence scores.")
+    
+    # Get dashboard profiles from API
+    try:
+        API_KEY = os.getenv("API_KEY", "supersecrettoken123")
+        API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+        
+        # Get all dashboard profiles
+        profiles_response = requests.get(
+            f"{API_BASE_URL}/api/v1/dashboard-profiles",
+            headers={"Authorization": f"Bearer {API_KEY}"}
+        )
+        
+        if profiles_response.status_code == 200:
+            profiles_data = profiles_response.json()
+            dashboard_profiles = profiles_data.get('profiles', [])
+            
+            if dashboard_profiles:
+                # Create expandable sections for each dashboard
+                cols = st.columns(min(len(dashboard_profiles), 3))
+                for i, profile in enumerate(dashboard_profiles):
+                    with cols[i % 3]:
+                        display_name = profile.get('user_provided_name', profile.get('dashboard_name', 'Unknown Dashboard'))
+                        
+                        # Create a button-like expander for each dashboard
+                        if st.button(f"📊 {display_name}", key=f"dashboard_detail_{i}", use_container_width=True):
+                            st.session_state[f'show_details_{profile["dashboard_id"]}'] = not st.session_state.get(f'show_details_{profile["dashboard_id"]}', False)
+                        
+                        # Show basic info
+                        st.caption(f"ID: {profile['dashboard_id']}")
+                        if profile.get('complexity_score'):
+                            st.caption(f"Complexity: {profile['complexity_score']:.1f}/10")
+                
+                # Display detailed analysis if any dashboard is selected
+                for profile in dashboard_profiles:
+                    if st.session_state.get(f'show_details_{profile["dashboard_id"]}', False):
+                        st.divider()
+                        render_detailed_dashboard_analysis(profile['dashboard_id'])
+                        st.divider()
+            
+            else:
+                st.info("No dashboard profiles found. Run analysis first.")
+        
+        else:
+            st.warning("Could not load dashboard profiles.")
+    
+    except Exception as e:
+        st.error(f"Error loading dashboard profiles: {str(e)}")
     
     st.divider()
     
     # Get detailed results from API
     try:
-        API_KEY = os.getenv("API_KEY", "supersecrettoken123")
-        API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
-        
         # Get similarity matrix
         similarity_response = requests.get(
             f"{API_BASE_URL}/api/v1/similarity-matrix",

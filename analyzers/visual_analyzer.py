@@ -79,71 +79,125 @@ class VisualAnalyzer:
             return []
     
     def _get_visual_analysis_prompt(self) -> str:
-        """Get the prompt for GPT-4 Vision analysis"""
+        """Get the enhanced prompt for GPT-4 Vision analysis with confidence assessment"""
         return """
-        Analyze this Power BI dashboard screenshot and extract the following information in JSON format:
+        Analyze this Power BI dashboard screenshot and extract comprehensive information in JSON format.
+        Be as detailed and accurate as possible, and include confidence assessments for your extractions.
 
         Please identify and catalog all visual elements with their properties:
 
         1. **Charts and Visualizations**:
-           - Type (bar chart, line chart, pie chart, table, matrix, card, etc.)
-           - Title (if visible)
-           - Position (approximate x, y coordinates and dimensions)
-           - Visible data fields/columns
-           - Chart-specific properties (orientation, colors, etc.)
+           - Type (bar chart, line chart, pie chart, table, matrix, card, gauge, treemap, etc.)
+           - Title (exact text if visible)
+           - Position (approximate x, y coordinates as percentages of screen)
+           - Dimensions (approximate width, height as percentages)
+           - Visible data fields/columns (all visible text)
+           - Chart-specific properties (orientation, colors, axis labels, legend)
+           - Data insights (visible values, trends, patterns)
+           - Confidence score (0-1) for this element identification
 
-        2. **KPI Cards**:
-           - Title/label
-           - Value format (currency, percentage, number)
-           - Trend indicators (up/down arrows, colors)
-           - Position
+        2. **KPI Cards and Metrics**:
+           - Title/label (exact text)
+           - Value (exact number if visible)
+           - Value format (currency, percentage, number, text)
+           - Trend indicators (up/down arrows, colors, percentage changes)
+           - Comparison values (previous period, target, etc.)
+           - Position and size
+           - Confidence score for extraction
 
         3. **Filters and Slicers**:
-           - Filter type (dropdown, slicer, date picker)
-           - Field being filtered
-           - Visible filter options (if any)
+           - Filter type (dropdown, slicer, date picker, search box)
+           - Field being filtered (exact label)
+           - Visible filter options (all visible values)
+           - Selected values (if highlighted)
+           - Position
+           - Confidence score
 
-        4. **Layout and Structure**:
-           - Overall layout pattern
-           - Number of sections/areas
-           - Color scheme
-           - Header/title information
+        4. **Text Elements**:
+           - Dashboard title/header
+           - Section titles
+           - Labels and annotations
+           - Watermarks or branding
+           - Confidence score
 
-        Return the analysis as a JSON object with this structure:
+        5. **Layout and Design Analysis**:
+           - Overall layout pattern (grid, freeform, tabular)
+           - Number of distinct sections/areas
+           - Color scheme (primary colors used)
+           - Visual hierarchy (most prominent elements)
+           - Dashboard complexity score (1-10)
+           - Overall visual design quality assessment
+
+        6. **Data Quality Indicators**:
+           - Are there any obvious data quality issues visible?
+           - Missing data indicators
+           - Error messages or warnings
+           - Last refresh timestamps (if visible)
+
+        Return the analysis as a JSON object with this enhanced structure:
         {
             "visual_elements": [
                 {
                     "visual_type": "bar_chart",
                     "title": "Sales by Region",
-                    "position": {"x": 100, "y": 50, "width": 400, "height": 300},
+                    "position": {"x": 10, "y": 15, "width": 45, "height": 30},
                     "data_fields": ["Region", "Sales Amount"],
-                    "chart_properties": {"orientation": "vertical", "color_scheme": "blue"}
+                    "chart_properties": {
+                        "orientation": "vertical", 
+                        "color_scheme": "blue_gradient",
+                        "axis_labels": ["Regions", "Sales ($M)"]
+                    },
+                    "data_insights": "Shows declining trend in Q4",
+                    "confidence_score": 0.92
                 }
             ],
             "kpi_cards": [
                 {
                     "title": "Total Sales",
+                    "value": "$2.4M",
                     "value_format": "currency",
-                    "trend_indicator": "up",
-                    "position": {"x": 50, "y": 10, "width": 200, "height": 100}
+                    "trend_indicator": "up_12%",
+                    "comparison_value": "$2.1M last month",
+                    "position": {"x": 5, "y": 5, "width": 20, "height": 10},
+                    "confidence_score": 0.95
                 }
             ],
             "filters": [
                 {
-                    "filter_type": "dropdown",
-                    "field_name": "Year",
-                    "filter_values": ["2022", "2023", "2024"]
+                    "filter_type": "date_slicer",
+                    "field_name": "Date",
+                    "visible_options": ["2023", "2024"],
+                    "selected_values": ["2024"],
+                    "position": {"x": 70, "y": 5, "width": 25, "height": 8},
+                    "confidence_score": 0.88
                 }
             ],
-            "layout_properties": {
-                "sections_count": 4,
-                "color_scheme": "blue_theme",
-                "has_header": true,
-                "layout_pattern": "grid"
-            }
+            "text_elements": [
+                {
+                    "type": "dashboard_title",
+                    "text": "Sales Performance Dashboard",
+                    "position": {"x": 2, "y": 2, "width": 96, "height": 5},
+                    "confidence_score": 0.98
+                }
+            ],
+            "layout_analysis": {
+                "layout_pattern": "grid_4x3",
+                "sections_count": 6,
+                "color_scheme": ["#0078D4", "#FFFFFF", "#F3F2F1"],
+                "visual_hierarchy": "Title > KPIs > Main Charts > Filters",
+                "complexity_score": 7,
+                "design_quality": "professional"
+            },
+            "data_quality": {
+                "issues_detected": false,
+                "missing_data": false,
+                "error_messages": [],
+                "last_refresh": "2024-01-15 09:30 AM"
+            },
+            "overall_confidence": 0.91
         }
 
-        Focus on accuracy and detail. If something is unclear or not visible, indicate that in the response.
+        Focus on accuracy and provide confidence scores for each element. If something is unclear or not visible, indicate lower confidence and note the limitation.
         """
     
     def _parse_visual_analysis(self, analysis_result: str, page_name: str) -> List[VisualElement]:

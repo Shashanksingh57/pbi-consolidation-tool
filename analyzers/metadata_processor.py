@@ -57,7 +57,7 @@ class MetadataProcessor:
             logger.info(f"Detected CSV headers: {original_headers}")
             logger.info(f"Lowercase headers for matching: {headers}")
             
-            # Initialize return structure  
+            # Initialize return structure
             measures = []
             tables = []
             relationships = []
@@ -68,11 +68,11 @@ class MetadataProcessor:
                 logger.info("Identified as measures file")
                 measures = self._parse_measures_file(rows)
                 
-            elif 'tablename' in headers and 'datatype' in headers:
-                logger.info("Identified as tables file") 
+            elif 'tableid' in headers and 'explicitdatatype' in headers:
+                logger.info("Identified as tables file")
                 tables = self._parse_tables_file(rows)
                 
-            elif 'fromtable' in headers and 'tocolumn' in headers:
+            elif 'fromtableid' in headers and 'totableid' in headers:
                 logger.info("Identified as relationships file")
                 relationships = self._parse_relationships_file(rows)
                 
@@ -144,7 +144,7 @@ class MetadataProcessor:
             # Group rows by TableName since each row represents a column
             table_groups = {}
             for row in rows:
-                table_name = self._get_case_insensitive_value(row, 'TableName')
+                table_name = self._get_case_insensitive_value(row, 'TableID')
                 if table_name:
                     if table_name not in table_groups:
                         table_groups[table_name] = []
@@ -196,10 +196,10 @@ class MetadataProcessor:
         try:
             for row in rows:
                 # Use case-insensitive column access for DAX Studio relationships export
-                from_table = self._get_case_insensitive_value(row, 'FromTable')
-                from_column = self._get_case_insensitive_value(row, 'FromColumn')
-                to_table = self._get_case_insensitive_value(row, 'ToTable')
-                to_column = self._get_case_insensitive_value(row, 'ToColumn')
+                from_table = self._get_case_insensitive_value(row, 'FromTableID')
+                from_column = self._get_case_insensitive_value(row, 'FromColumnID')
+                to_table = self._get_case_insensitive_value(row, 'ToTableID')
+                to_column = self._get_case_insensitive_value(row, 'ToColumnID')
                 
                 # Handle various possible cardinality column names (case-insensitive)
                 cardinality = (

@@ -60,15 +60,24 @@ class Relationship(BaseModel):
     to_column: str = Field(..., description="Target column")
     relationship_type: str = Field(default="one_to_many", description="Relationship cardinality")
 
-# ─── Dashboard Profile Models ───────────────────────────────────────────────
+# ─── Enhanced Analysis Models for Transparency ─────────────────────────────
+
+class AnalysisDetails(BaseModel):
+    """Detailed analysis information for transparency"""
+    visual_analysis_summary: Dict[str, Any] = Field(default_factory=dict, description="GPT-4 Vision analysis summary")
+    raw_visual_extraction: List[Dict[str, Any]] = Field(default_factory=list, description="Raw visual element extraction data")
+    dax_complexity_metrics: Dict[str, Any] = Field(default_factory=dict, description="DAX formula complexity analysis")
+    data_model_metrics: Dict[str, Any] = Field(default_factory=dict, description="Data model analysis metrics")
+    processing_metadata: Dict[str, Any] = Field(default_factory=dict, description="Processing timestamps and metadata")
 
 class DashboardProfile(BaseModel):
-    """Complete profile of a Power BI dashboard"""
+    """Complete profile of a Power BI dashboard with enhanced transparency"""
     dashboard_id: str = Field(..., description="Unique identifier for dashboard")
     dashboard_name: str = Field(..., description="Human-readable dashboard name")
+    user_provided_name: Optional[str] = Field(None, description="User's custom name for this dashboard")
     created_at: datetime = Field(default_factory=datetime.now, description="Profile creation timestamp")
     
-    # Visual elements
+    # Visual elements (enhanced for transparency)
     visual_elements: List[VisualElement] = Field(default_factory=list)
     kpi_cards: List[KPICard] = Field(default_factory=list)
     filters: List[FilterElement] = Field(default_factory=list)
@@ -82,6 +91,31 @@ class DashboardProfile(BaseModel):
     # Computed properties
     total_pages: int = Field(default=1, description="Number of dashboard pages")
     complexity_score: Optional[float] = Field(None, description="Computed complexity score")
+    
+    # Enhanced transparency features
+    analysis_details: AnalysisDetails = Field(default_factory=AnalysisDetails, description="Detailed analysis information")
+    extraction_confidence: Dict[str, float] = Field(default_factory=dict, description="Confidence scores for different extraction phases")
+    
+    def get_display_name(self) -> str:
+        """Get the most appropriate display name for the dashboard"""
+        return self.user_provided_name or self.dashboard_name
+    
+    def get_visual_summary(self) -> Dict[str, Any]:
+        """Get a summary of visual elements for display"""
+        visual_types = {}
+        for element in self.visual_elements:
+            vtype = element.visual_type
+            visual_types[vtype] = visual_types.get(vtype, 0) + 1
+        
+        return {
+            "total_elements": len(self.visual_elements),
+            "visual_types": visual_types,
+            "kpi_count": len(self.kpi_cards),
+            "filter_count": len(self.filters),
+            "measure_count": len(self.measures),
+            "table_count": len(self.tables),
+            "relationship_count": len(self.relationships)
+        }
 
 # ─── Similarity Analysis Models ─────────────────────────────────────────────
 
@@ -142,6 +176,39 @@ class BatchAnalysisRequest(BaseModel):
     """Request for batch analysis of multiple dashboards"""
     dashboards: List[DashboardInput] = Field(..., description="List of dashboards to analyze")
     analysis_config: Optional['AnalysisConfig'] = Field(None, description="Analysis configuration")
+
+# ─── Decoupled Analysis Models ─────────────────────────────────────────────
+
+class ProfileExtractionRequest(BaseModel):
+    """Request for generating a complete dashboard profile (decoupled from scoring)"""
+    dashboard_id: str = Field(..., description="Unique dashboard identifier")
+    dashboard_name: str = Field(..., description="Dashboard display name")
+    user_provided_name: Optional[str] = Field(None, description="User's custom name for the dashboard")
+    include_analysis_details: bool = Field(default=True, description="Include detailed analysis data")
+
+class ProfileExtractionResponse(BaseModel):
+    """Response containing a complete dashboard profile"""
+    success: bool = Field(..., description="Extraction success status")
+    profile: Optional[DashboardProfile] = Field(None, description="Extracted dashboard profile")
+    extraction_summary: Dict[str, Any] = Field(default_factory=dict, description="Summary of extraction process")
+    processing_time: float = Field(..., description="Total processing time in seconds")
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+class ScoringRequest(BaseModel):
+    """Request for similarity scoring using existing profiles"""
+    profile_ids: List[str] = Field(..., description="List of dashboard profile IDs to compare")
+    similarity_config: Optional['SimilarityAnalysisRequest'] = Field(None, description="Similarity analysis configuration")
+    include_detailed_breakdown: bool = Field(default=True, description="Include detailed similarity breakdown")
+
+class ScoringResponse(BaseModel):
+    """Response containing similarity scores and recommendations"""
+    success: bool = Field(..., description="Scoring success status")
+    similarity_matrix: List[List[float]] = Field(default_factory=list, description="Similarity score matrix")
+    detailed_scores: List[SimilarityScore] = Field(default_factory=list, description="Detailed pairwise scores")
+    consolidation_groups: List[ConsolidationGroup] = Field(default_factory=list, description="Recommended consolidation groups")
+    scoring_metadata: Dict[str, Any] = Field(default_factory=dict, description="Scoring process metadata")
+    processing_time: float = Field(..., description="Scoring processing time in seconds")
+    timestamp: datetime = Field(default_factory=datetime.now)
 
 # ─── Request/Response Models ────────────────────────────────────────────────
 
