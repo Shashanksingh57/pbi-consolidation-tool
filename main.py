@@ -173,6 +173,70 @@ async def upload_metadata(
         logger.error(f"Error in metadata upload: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/v1/upload-performance-analyzer", dependencies=[Depends(verify_token)])
+async def upload_performance_analyzer(
+    dashboard_id: str,
+    file: UploadFile = File(...)
+):
+    """Accept Performance Analyzer JSON export and link visuals to measures"""
+    try:
+        logger.info(f"Processing Performance Analyzer data for dashboard: {dashboard_id}")
+        
+        if dashboard_id not in dashboard_profiles:
+            raise HTTPException(status_code=404, detail="Dashboard profile not found. Please upload screenshots first.")
+        
+        # Read JSON file
+        file_content = await file.read()
+        performance_json = file_content.decode('utf-8')
+        
+        # Get current dashboard profile
+        profile = dashboard_profiles[dashboard_id]
+        
+        if not profile.visual_elements:
+            raise HTTPException(
+                status_code=400, 
+                detail="No visual elements found. Please process screenshots before uploading Performance Analyzer data."
+            )
+        
+        # Link visuals to measures using Performance Analyzer data
+        updated_visuals = metadata_processor.link_visuals_to_measures(
+            profile.visual_elements, 
+            performance_json
+        )
+        
+        # Update profile with linked visuals
+        profile.visual_elements = updated_visuals
+        dashboard_profiles[dashboard_id] = profile
+        
+        # Generate summary statistics
+        linked_visuals = [v for v in profile.visual_elements if v.referenced_measures]
+        total_measure_links = sum(len(v.referenced_measures) for v in linked_visuals)
+        
+        return AnalysisResponse(
+            success=True,
+            message="Performance Analyzer data processed successfully",
+            data={
+                "dashboard_id": dashboard_id,
+                "total_visuals": len(profile.visual_elements),
+                "linked_visuals": len(linked_visuals),
+                "total_measure_links": total_measure_links,
+                "linking_confidence": "High (from Performance Analyzer)",
+                "visual_linking_details": [
+                    {
+                        "visual_title": v.title,
+                        "visual_type": v.visual_type,
+                        "measures_count": len(v.referenced_measures) if v.referenced_measures else 0,
+                        "measures": [m.get('measure_name', '') for m in v.referenced_measures] if v.referenced_measures else []
+                    }
+                    for v in linked_visuals
+                ]
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error processing Performance Analyzer data: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/v1/analyze-similarity", dependencies=[Depends(verify_token)])
 async def analyze_similarity():
     """Run similarity analysis on all uploaded dashboards"""
@@ -259,7 +323,7 @@ async def get_similarity_matrix():
 
 @app.post("/api/v1/process-dashboards", dependencies=[Depends(verify_token)])
 async def process_dashboards(files: List[UploadFile] = File(...), dashboard_info: str = None):
-    """Process dashboards to extract visual and metadata information"""
+    """Process dashboards to extract visual and metadata information with Performance Analyzer integration"""
     try:
         logger.info(f"Starting dashboard processing with {len(files)} files")
         
@@ -277,7 +341,7 @@ async def process_dashboards(files: List[UploadFile] = File(...), dashboard_info
         
         for file in files:
             # Parse filename to extract dashboard info
-            # Expected format: dashboard_X_view_Y.ext or dashboard_X_metadata.csv
+            # Expected format: dashboard_X_view_Y.ext, dashboard_X_metadata.csv, or dashboard_X_performance.json
             filename = file.filename.lower()
             
             if 'dashboard_' in filename:
@@ -292,11 +356,14 @@ async def process_dashboards(files: List[UploadFile] = File(...), dashboard_info
                         dashboard_files[dashboard_id] = {
                             'name': custom_name,
                             'views': [],
-                            'metadata': []
+                            'metadata': [],
+                            'performance_analyzer': []
                         }
                     
-                    if 'metadata' in filename:
+                    if 'metadata' in filename and filename.endswith('.csv'):
                         dashboard_files[dashboard_id]['metadata'].append(file)
+                    elif 'performance' in filename and filename.endswith('.json'):
+                        dashboard_files[dashboard_id]['performance_analyzer'].append(file)
                     elif 'view' in filename:
                         dashboard_files[dashboard_id]['views'].append(file)
         
@@ -352,12 +419,46 @@ async def process_dashboards(files: List[UploadFile] = File(...), dashboard_info
                 
                 metadata_summary = metadata_results.get('summary', {})
             
+            # Process Performance Analyzer data and link visuals to measures
+            performance_summary = {}
+            if files_data['performance_analyzer'] and dashboard_profile.visual_elements:
+                try:
+                    logger.info(f"Processing Performance Analyzer data for {dashboard_id}")
+                    
+                    for perf_file in files_data['performance_analyzer']:
+                        # Read Performance Analyzer JSON content
+                        perf_content = await perf_file.read()
+                        perf_json_content = perf_content.decode('utf-8')
+                        
+                        # Link visuals to measures using Performance Analyzer data
+                        dashboard_profile.visual_elements = metadata_processor.link_visuals_to_measures(
+                            dashboard_profile.visual_elements, 
+                            perf_json_content
+                        )
+                    
+                    # Generate performance summary
+                    linked_visuals = [v for v in dashboard_profile.visual_elements if v.referenced_measures]
+                    total_measure_links = sum(len(v.referenced_measures) for v in linked_visuals)
+                    
+                    performance_summary = {
+                        'linked_visuals_count': len(linked_visuals),
+                        'total_measure_links': total_measure_links,
+                        'visual_linking_confidence': 'High (Performance Analyzer)'
+                    }
+                    
+                    logger.info(f"Performance Analyzer linking complete for {dashboard_id}: {len(linked_visuals)} visuals linked")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing Performance Analyzer data for {dashboard_id}: {str(e)}")
+                    performance_summary = {'error': str(e)}
+            
             # Store in global profiles for later similarity analysis
             dashboard_profiles[dashboard_id] = dashboard_profile
             processed_dashboards.append({
                 'profile': dashboard_profile,
                 'view_summaries': view_summaries,
-                'metadata_summary': metadata_summary
+                'metadata_summary': metadata_summary,
+                'performance_summary': performance_summary
             })
         
         return AnalysisResponse(
@@ -374,7 +475,8 @@ async def process_dashboards(files: List[UploadFile] = File(...), dashboard_info
                         "tables_count": len(item['profile'].tables),
                         "relationships_count": len(item['profile'].relationships),
                         "view_summaries": item['view_summaries'],
-                        "metadata_summary": item['metadata_summary']
+                        "metadata_summary": item['metadata_summary'],
+                        "performance_summary": item['performance_summary']
                     }
                     for item in processed_dashboards
                 ]

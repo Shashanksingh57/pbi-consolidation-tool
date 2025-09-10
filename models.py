@@ -14,6 +14,7 @@ class VisualElement(BaseModel):
     data_fields: List[str] = Field(default_factory=list, description="Detected data fields/columns")
     chart_properties: Dict[str, Any] = Field(default_factory=dict, description="Chart-specific properties")
     page_name: str = Field(..., description="Dashboard page this visual belongs to")
+    referenced_measures: Optional[List[Dict[str, Any]]] = Field(None, description="Measures linked to this visual with confidence scores")
 
 class KPICard(BaseModel):
     """Represents a KPI card detected in dashboard"""

@@ -546,3 +546,256 @@ class MetadataProcessor:
         
         analysis = self.analyze_dax_formula(formula)
         return analysis.get('complexity_score', 0.0)
+    
+    def link_visuals_to_measures(self, visual_elements, performance_analyzer_content: str):
+        """
+        Link visual elements to DAX measures using Performance Analyzer JSON export
+        
+        Args:
+            visual_elements: List of VisualElement objects from GPT-4 Vision analysis
+            performance_analyzer_content: JSON content from Performance Analyzer export
+            
+        Returns:
+            Updated visual_elements with referenced_measures populated
+        """
+        try:
+            import json
+            import re
+            
+            logger.info("Starting visual-to-measure linking using Performance Analyzer data")
+            
+            # Parse Performance Analyzer JSON
+            performance_data = json.loads(performance_analyzer_content)
+            
+            # Extract visual title to DAX query mappings
+            visual_dax_mapping = self._extract_visual_dax_mapping(performance_data)
+            
+            # Link each visual element to measures
+            for visual in visual_elements:
+                if visual.title:
+                    # Try to find matching visual in Performance Analyzer data
+                    matching_queries = self._find_matching_queries(visual.title, visual_dax_mapping)
+                    
+                    if matching_queries:
+                        # Extract measure names from DAX queries
+                        measures_found = []
+                        for query_info in matching_queries:
+                            dax_query = query_info.get('query', '')
+                            measures_in_query = self._extract_measures_from_dax(dax_query)
+                            
+                            for measure_name in measures_in_query:
+                                measures_found.append({
+                                    'measure_name': measure_name,
+                                    'confidence': 'High (from Performance Analyzer)',
+                                    'source_query': dax_query[:200] + '...' if len(dax_query) > 200 else dax_query,
+                                    'visual_title_match': query_info.get('visual_title', ''),
+                                    'execution_duration_ms': query_info.get('duration_ms', 0)
+                                })
+                        
+                        if measures_found:
+                            visual.referenced_measures = measures_found
+                            logger.info(f"Linked visual '{visual.title}' to {len(measures_found)} measures")
+            
+            # Log summary statistics
+            linked_visuals = [v for v in visual_elements if v.referenced_measures]
+            total_measure_links = sum(len(v.referenced_measures) for v in linked_visuals)
+            
+            logger.info(f"Linking complete: {len(linked_visuals)}/{len(visual_elements)} visuals linked to {total_measure_links} total measure references")
+            
+            return visual_elements
+            
+        except Exception as e:
+            logger.error(f"Error linking visuals to measures: {str(e)}")
+            # Return original visual elements unchanged if linking fails
+            return visual_elements
+    
+    def _extract_visual_dax_mapping(self, performance_data: dict) -> dict:
+        """
+        Extract mapping of visual titles to their DAX queries from Performance Analyzer JSON
+        
+        Expected structure varies by Power BI version, but typically includes:
+        - Events array with query information
+        - Visual context information
+        """
+        visual_dax_mapping = {}
+        
+        try:
+            # Handle common Performance Analyzer JSON structures
+            events = performance_data.get('events', [])
+            
+            for event in events:
+                # Look for query execution events
+                if event.get('category') == 'Query' or 'query' in event.get('name', '').lower():
+                    
+                    # Extract visual title from context
+                    visual_title = self._extract_visual_title_from_event(event)
+                    
+                    # Extract DAX query
+                    dax_query = event.get('query', '') or event.get('commandText', '') or event.get('statement', '')
+                    
+                    # Extract duration
+                    duration_ms = event.get('durationMs', 0) or event.get('duration', 0)
+                    
+                    if visual_title and dax_query:
+                        if visual_title not in visual_dax_mapping:
+                            visual_dax_mapping[visual_title] = []
+                        
+                        visual_dax_mapping[visual_title].append({
+                            'visual_title': visual_title,
+                            'query': dax_query,
+                            'duration_ms': duration_ms,
+                            'event_type': event.get('name', 'unknown')
+                        })
+            
+            # Alternative structure - check for 'queries' array
+            if 'queries' in performance_data:
+                for query_info in performance_data['queries']:
+                    visual_title = query_info.get('visualTitle', '') or query_info.get('visual', '')
+                    dax_query = query_info.get('query', '') or query_info.get('dax', '')
+                    duration_ms = query_info.get('duration', 0)
+                    
+                    if visual_title and dax_query:
+                        if visual_title not in visual_dax_mapping:
+                            visual_dax_mapping[visual_title] = []
+                        
+                        visual_dax_mapping[visual_title].append({
+                            'visual_title': visual_title,
+                            'query': dax_query,
+                            'duration_ms': duration_ms,
+                            'event_type': 'query'
+                        })
+            
+            logger.info(f"Extracted {len(visual_dax_mapping)} visual-to-DAX mappings from Performance Analyzer data")
+            return visual_dax_mapping
+            
+        except Exception as e:
+            logger.error(f"Error extracting visual-DAX mapping: {str(e)}")
+            return {}
+    
+    def _extract_visual_title_from_event(self, event: dict) -> str:
+        """Extract visual title from Performance Analyzer event"""
+        # Try various possible fields where visual title might be stored
+        possible_fields = [
+            'visualTitle', 'visual_title', 'visualName', 'visual_name',
+            'objectName', 'object_name', 'title', 'name'
+        ]
+        
+        # Check direct fields
+        for field in possible_fields:
+            if event.get(field):
+                return event[field]
+        
+        # Check nested context or properties
+        context = event.get('context', {})
+        properties = event.get('properties', {})
+        
+        for field in possible_fields:
+            if context.get(field):
+                return context[field]
+            if properties.get(field):
+                return properties[field]
+        
+        # Try to extract from query text comments
+        query_text = event.get('query', '') or event.get('commandText', '')
+        if query_text:
+            # Look for comments that might contain visual names
+            comment_match = re.search(r'//\s*(?:Visual|Chart):\s*(.+)', query_text, re.IGNORECASE)
+            if comment_match:
+                return comment_match.group(1).strip()
+        
+        return ''
+    
+    def _find_matching_queries(self, visual_title: str, visual_dax_mapping: dict) -> list:
+        """
+        Find queries that match the given visual title using fuzzy matching
+        """
+        matching_queries = []
+        
+        # Direct match first
+        if visual_title in visual_dax_mapping:
+            matching_queries.extend(visual_dax_mapping[visual_title])
+        
+        # Fuzzy matching for slight variations
+        visual_title_lower = visual_title.lower().strip()
+        for mapped_title, queries in visual_dax_mapping.items():
+            mapped_title_lower = mapped_title.lower().strip()
+            
+            # Check if titles are similar (contains, starts with, ends with)
+            if (visual_title_lower in mapped_title_lower or 
+                mapped_title_lower in visual_title_lower or
+                visual_title_lower.replace(' ', '') == mapped_title_lower.replace(' ', '')):
+                matching_queries.extend(queries)
+        
+        return matching_queries
+    
+    def _extract_measures_from_dax(self, dax_query: str) -> list:
+        """
+        Extract measure names from a DAX query
+        
+        Looks for patterns like [Measure Name] or 'Table'[Measure Name]
+        """
+        measures = []
+        
+        if not dax_query:
+            return measures
+        
+        try:
+            # Pattern 1: [Measure Name] format
+            bracket_measures = re.findall(r'\[([^\]]+)\]', dax_query)
+            
+            # Pattern 2: 'Table'[Measure] or "Table"[Measure] format  
+            table_measure_pattern = r'[\'"`]([^\'"`]+)[\'"`]\[([^\]]+)\]'
+            table_measures = re.findall(table_measure_pattern, dax_query)
+            
+            # Filter out likely column references and keep measure-like names
+            for measure in bracket_measures:
+                if self._is_likely_measure(measure):
+                    measures.append(measure)
+            
+            # Add table.measure combinations
+            for table_name, measure_name in table_measures:
+                if self._is_likely_measure(measure_name):
+                    measures.append(f"{table_name}[{measure_name}]")
+            
+            # Remove duplicates while preserving order
+            measures = list(dict.fromkeys(measures))
+            
+        except Exception as e:
+            logger.warning(f"Error extracting measures from DAX query: {str(e)}")
+        
+        return measures
+    
+    def _is_likely_measure(self, name: str) -> bool:
+        """
+        Heuristic to determine if a bracketed name is likely a measure vs a column
+        """
+        if not name:
+            return False
+        
+        name_lower = name.lower()
+        
+        # Skip obvious column names
+        column_indicators = [
+            'date', 'time', 'id', 'key', 'name', 'description', 
+            'category', 'type', 'status', 'code', 'year', 'month', 'day'
+        ]
+        
+        if any(indicator in name_lower for indicator in column_indicators):
+            return False
+        
+        # Measure indicators
+        measure_indicators = [
+            'total', 'sum', 'avg', 'average', 'count', 'max', 'min',
+            'percentage', 'percent', 'rate', 'ratio', 'score', 'kpi',
+            'revenue', 'sales', 'profit', 'cost', 'amount', 'value'
+        ]
+        
+        if any(indicator in name_lower for indicator in measure_indicators):
+            return True
+        
+        # If it contains spaces or special formatting, more likely to be a measure
+        if ' ' in name or any(char in name for char in ['%', '$', '€', '£']):
+            return True
+        
+        # Default to True for ambiguous cases (conservative approach)
+        return True
