@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import tempfile
 import shutil
-from models import DashboardProfile, DaxMeasure, DataTable, DataRelationship
+from models import DashboardProfile, DAXMeasure, DataTable, Relationship
 
 class PBIToolsWrapper:
     """Wrapper for pbi-tools CLI operations"""
@@ -252,9 +252,9 @@ class PBIToolsWrapper:
         """
         # Convert measures
         measures = [
-            DaxMeasure(
-                name=m["name"],
-                expression=m["expression"],
+            DAXMeasure(
+                measure_name=m["name"],
+                dax_formula=m["expression"],
                 table_name=m["table"],
                 description=m.get("description"),
                 format_string=m.get("format")
@@ -265,8 +265,8 @@ class PBIToolsWrapper:
         # Convert tables
         tables = [
             DataTable(
-                name=t["name"],
-                columns=t.get("columns", 0),
+                table_name=t["name"],
+                column_count=t.get("columns", 0),
                 row_count=t.get("rows", 0)
             )
             for t in extracted_data.get("tables", [])
@@ -274,12 +274,12 @@ class PBIToolsWrapper:
 
         # Convert relationships
         relationships = [
-            DataRelationship(
+            Relationship(
                 from_table=r["from_table"],
                 from_column=r["from_column"],
                 to_table=r["to_table"],
                 to_column=r["to_column"],
-                relationship_type=r.get("type", "single")
+                cardinality=r.get("type", "single")
             )
             for r in extracted_data.get("relationships", [])
         ]
@@ -296,12 +296,11 @@ class PBIToolsWrapper:
             measures=measures,
             tables=tables,
             relationships=relationships,
-            visual_elements=visual_elements,
-            screenshot_path=screenshot_path,
-            extraction_method="pbi-tools",
-            metadata={
+            processing_metadata={
+                "extraction_method": "pbi-tools",
                 "pages": extracted_data.get("pages", []),
-                "data_sources": extracted_data.get("data_sources", [])
+                "data_sources": extracted_data.get("data_sources", []),
+                "screenshot_path": screenshot_path
             }
         )
 
