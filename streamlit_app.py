@@ -360,43 +360,384 @@ def render_sidebar():
 # Stage 1: Analysis Method Choice
 def render_method_choice():
     st.header("🎯 Choose Analysis Method")
-    
+
     st.write("""
     Select how you want to analyze your Power BI dashboards:
     """)
-    
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
-        st.subheader("📤 Local Batch Analysis")
+        # Combined Local Analysis section
+        st.subheader("📁 Local Analysis")
+
         st.write("""
-        **Best for one-off comparisons or when you don't have API access.** This method gives you complete control by using manually exported metadata files (from DAX Studio) and screenshots you upload directly.
-        
-        **Use this method if:**
-        - You are working with local .pbix files
-        - Your organization has not configured API access
-        - You need to compare a small, specific set of dashboards
+        **Analyze dashboards from local files.** Choose between manual upload or automated extraction.
+
+        **Use this when:**
+        - Working with local .pbix files
+        - No cloud API access required
+        - Need full control over the process
         """)
-        
-        if st.button("Start Local Batch Analysis", type="primary", key="local_batch"):
-            st.session_state.analysis_method = "Local Batch Analysis"
-            st.session_state.stage = 'dashboard_config'
-            st.rerun()
-    
+
+        # Add spacing to match right column height
+        st.write("")  # Extra line for alignment
+
     with col2:
-        st.subheader("☁️ REST API Analysis")
+        # Power BI Service section
+        st.subheader("☁️ Power BI Service")
+
         st.write("""
-        **The recommended method for automated and scalable analysis.** Connect directly to your Power BI Service to fetch dashboard data from entire workspaces in real-time. Requires initial setup.
-        
-        **Use this method if:**
+        **Enterprise-scale automated analysis.** Connect to Power BI Service for real-time workspace analysis.
+
+        **Use this when:**
         - You have a Power BI Pro or Premium license
         - You need to analyze many dashboards across one or more workspaces
         - You want to automate the data extraction process
         """)
-        
-        if st.button("Start REST API Analysis", type="primary", key="rest_api"):
+
+    # Buttons in separate row to ensure alignment
+    col1_btn, col2_btn = st.columns(2)
+
+    with col1_btn:
+        if st.button("🖥️ Start Local Analysis", type="primary", key="local_analysis", use_container_width=True):
+            st.session_state.analysis_method = "Local Analysis"
+            st.session_state.stage = 'local_mode_selection'
+            st.rerun()
+
+    with col2_btn:
+        if st.button("☁️ Start Power BI Service", type="primary", key="rest_api", use_container_width=True):
             st.session_state.analysis_method = "REST API Analysis"
             st.session_state.stage = 'api_credentials'
+            st.rerun()
+
+# Stage 1.5: Local Mode Selection
+def render_local_mode_selection():
+    st.header("📁 Local Analysis - Choose Method")
+
+    st.write("Select how you want to analyze your local Power BI files:")
+
+    # Create two cards for the sub-modes
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### 📤 Manual Upload")
+
+        # Platform availability
+        st.success("✅ Available on: Windows, Mac, Linux")
+
+        # Prerequisites with expandable details
+        with st.expander("📋 Prerequisites & Requirements"):
+            st.write("""
+            **Required Files:**
+            - Dashboard screenshots (PNG/JPG)
+            - DAX Studio exports (CSV):
+              - Measures export
+              - Tables export
+              - Relationships export
+
+            **Tools Needed:**
+            - DAX Studio (free)
+            - Screenshot tool
+
+            **Best for:**
+            - Small number of dashboards (1-10)
+            - Quick one-time analysis
+            - When .pbix files are not available
+            """)
+
+        st.write("""
+        Upload screenshots and metadata exports manually.
+        Full control over what gets analyzed.
+        """)
+
+    with col2:
+        st.markdown("### 🔧 pbi-tools Extraction")
+
+        # Platform availability with warning
+        st.warning("⚠️ Windows Only - Requires pbi-tools")
+
+        # Prerequisites with expandable details
+        with st.expander("📋 Prerequisites & Requirements"):
+            st.write("""
+            **System Requirements:**
+            - Windows 10/11
+            - .NET Framework 4.7.2+
+            - pbi-tools CLI installed
+
+            **Required Files:**
+            - .pbix or .pbit files
+            - Dashboard screenshots (for visual analysis)
+
+            **Installation:**
+            1. Download: [pbi-tools releases](https://github.com/pbi-tools/pbi-tools/releases)
+            2. Extract ZIP to folder
+            3. Add to system PATH
+            4. Verify: `pbi-tools version`
+
+            **Best for:**
+            - Large number of dashboards (10+)
+            - Automated batch processing
+            - Complete metadata extraction
+            """)
+
+        st.write("""
+        Automatically extract metadata from .pbix files.
+        Bulk process entire folders of reports.
+        """)
+
+        import platform
+        is_windows = platform.system() == "Windows"
+
+        if not is_windows:
+            st.info("🔄 Demo mode will be used (not on Windows)")
+
+    # Buttons in separate row to ensure alignment
+    col1_btn, col2_btn = st.columns(2)
+
+    with col1_btn:
+        if st.button("📤 Use Manual Upload", type="primary", key="manual_mode", use_container_width=True):
+            st.session_state.analysis_sub_method = "Manual Upload"
+            st.session_state.stage = 'dashboard_config'
+            st.rerun()
+
+    with col2_btn:
+        if st.button(
+            "🔧 Use pbi-tools" if is_windows else "🔧 Use pbi-tools (Demo)",
+            type="primary" if is_windows else "secondary",
+            key="pbi_tools_mode",
+            use_container_width=True
+        ):
+            st.session_state.analysis_sub_method = "pbi-tools"
+            st.session_state.stage = 'folder_selection'
+            st.rerun()
+
+    # Back button
+    st.markdown("---")
+    if st.button("← Back to Analysis Methods"):
+        st.session_state.stage = 'method_choice'
+        st.rerun()
+
+# Stage 2A: Folder Selection for Local Batch Mode
+def render_folder_selection():
+    st.header("📁 Local Batch Mode - Folder Selection")
+
+    # Import the pbi-tools wrapper
+    import platform
+    from pbi_tools_wrapper import PBIToolsWrapper, MockPBIToolsWrapper
+
+    # Check if running on Windows
+    is_windows = platform.system() == "Windows"
+
+    if not is_windows:
+        st.warning("⚠️ **Note:** pbi-tools only runs on Windows. Using mock mode for demonstration.")
+        pbi_wrapper = MockPBIToolsWrapper()
+    else:
+        pbi_wrapper = PBIToolsWrapper()
+
+        # Check if pbi-tools is installed
+        if not pbi_wrapper.check_installation():
+            st.error("❌ pbi-tools is not installed or not in PATH")
+            st.info("""
+            **To install pbi-tools:**
+            1. Download from: https://github.com/pbi-tools/pbi-tools/releases
+            2. Extract the ZIP file
+            3. Add the folder to your system PATH
+            4. Restart this application
+            """)
+            if st.button("← Back to Method Selection"):
+                st.session_state.stage = 'method_choice'
+                st.rerun()
+            return
+
+    st.write("""
+    Select a folder containing your Power BI files (.pbix/.pbit).
+    The tool will automatically discover all files and extract their metadata.
+    """)
+
+    # Folder path input
+    folder_path = st.text_input(
+        "Enter folder path:",
+        value="C:\\Users\\YourName\\Documents\\PowerBI Files" if is_windows else "/Users/YourName/Documents/PowerBI Files",
+        help="Full path to the folder containing your .pbix/.pbit files"
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("← Back to Method Selection"):
+            st.session_state.stage = 'method_choice'
+            st.rerun()
+
+    with col2:
+        if st.button("Scan Folder", type="primary"):
+            if folder_path and os.path.exists(folder_path):
+                with st.spinner("Scanning folder for Power BI files..."):
+                    # Discover files
+                    pbi_files = pbi_wrapper.discover_pbi_files(folder_path)
+
+                    if pbi_files:
+                        st.session_state.discovered_files = pbi_files
+                        st.session_state.folder_path = folder_path
+                        st.session_state.pbi_wrapper = pbi_wrapper
+                        st.session_state.stage = 'pbi_extraction'
+                        st.rerun()
+                    else:
+                        st.error("No .pbix or .pbit files found in the selected folder")
+            else:
+                st.error("Please enter a valid folder path")
+
+    # Show example folder structure
+    with st.expander("📋 Example Folder Structure"):
+        st.code("""
+        PowerBI Files/
+        ├── Sales Dashboard.pbix
+        ├── Finance Report.pbix
+        ├── Templates/
+        │   └── Monthly Report.pbit
+        └── Archives/
+            ├── Q1 2024 Dashboard.pbix
+            └── Q2 2024 Dashboard.pbix
+        """)
+
+# Stage 2B: PBI File Extraction
+def render_pbi_extraction():
+    st.header("🔄 Extracting Dashboard Metadata")
+
+    if 'discovered_files' not in st.session_state:
+        st.error("No files discovered. Please go back to folder selection.")
+        if st.button("← Back to Folder Selection"):
+            st.session_state.stage = 'folder_selection'
+            st.rerun()
+        return
+
+    pbi_files = st.session_state.discovered_files
+    pbi_wrapper = st.session_state.pbi_wrapper
+
+    st.write(f"**Found {len(pbi_files)} Power BI file(s)** in the selected folder:")
+
+    # Display discovered files
+    file_df = pd.DataFrame(pbi_files)
+    file_df['size_mb'] = file_df['size_mb'].round(2)
+    st.dataframe(file_df[['name', 'type', 'size_mb', 'relative_path']], use_container_width=True)
+
+    if st.button("Extract Metadata from All Files", type="primary"):
+        extraction_results = []
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        for idx, file_info in enumerate(pbi_files):
+            progress = (idx + 1) / len(pbi_files)
+            progress_bar.progress(progress)
+            status_text.text(f"Extracting from: {file_info['name']}")
+
+            metadata, error = pbi_wrapper.extract_metadata(file_info['path'])
+            extraction_results.append({
+                "file_info": file_info,
+                "metadata": metadata,
+                "error": error
+            })
+
+        # Store results and move to screenshot upload
+        st.session_state.extraction_results = extraction_results
+        st.session_state.stage = 'screenshot_mapping'
+        st.rerun()
+
+    if st.button("← Back to Folder Selection"):
+        st.session_state.stage = 'folder_selection'
+        st.rerun()
+
+# Stage 2C: Screenshot Mapping
+def render_screenshot_mapping():
+    st.header("📸 Upload Dashboard Screenshots")
+
+    if 'extraction_results' not in st.session_state:
+        st.error("No extraction results found.")
+        if st.button("← Back"):
+            st.session_state.stage = 'folder_selection'
+            st.rerun()
+        return
+
+    extraction_results = st.session_state.extraction_results
+    st.write(f"""
+    **Metadata extracted successfully!** Now upload screenshots for each dashboard to enable visual analysis.
+    Screenshots help identify visual elements that cannot be extracted from the .pbix files.
+    """)
+
+    # Create tabs for each dashboard
+    dashboard_names = [result['file_info']['name'] for result in extraction_results]
+    tabs = st.tabs(dashboard_names)
+
+    screenshot_uploads = {}
+
+    for tab, result in zip(tabs, extraction_results):
+        with tab:
+            file_info = result['file_info']
+            metadata = result['metadata']
+
+            col1, col2 = st.columns([2, 1])
+
+            with col1:
+                st.subheader(f"📊 {file_info['name']}")
+
+                # Show extraction status
+                if result['error']:
+                    st.error(f"⚠️ Extraction had issues: {result['error']}")
+                else:
+                    st.success("✅ Metadata extracted successfully")
+
+                # Show metadata summary
+                if metadata.get('measures'):
+                    st.metric("Measures", len(metadata['measures']))
+                if metadata.get('tables'):
+                    st.metric("Tables", len(metadata['tables']))
+                if metadata.get('pages'):
+                    st.metric("Pages", len(metadata['pages']))
+
+            with col2:
+                st.write("**Upload Screenshot:**")
+                uploaded_file = st.file_uploader(
+                    f"Screenshot for {file_info['name']}",
+                    type=['png', 'jpg', 'jpeg'],
+                    key=f"screenshot_{file_info['name']}"
+                )
+
+                if uploaded_file:
+                    screenshot_uploads[file_info['name']] = uploaded_file
+                    st.image(uploaded_file, width=200)
+
+    # Show progress
+    uploaded_count = len(screenshot_uploads)
+    total_count = len(extraction_results)
+    st.progress(uploaded_count / total_count)
+    st.write(f"Screenshots uploaded: {uploaded_count}/{total_count}")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("← Back to Extraction"):
+            st.session_state.stage = 'pbi_extraction'
+            st.rerun()
+
+    with col2:
+        if st.button("Continue to Analysis →", type="primary"):
+            # Combine extraction results with screenshots
+            combined_profiles = []
+            pbi_wrapper = st.session_state.pbi_wrapper
+
+            for result in extraction_results:
+                file_name = result['file_info']['name']
+                screenshot = screenshot_uploads.get(file_name)
+
+                # Convert to dashboard profile
+                profile = pbi_wrapper.convert_to_dashboard_profile(
+                    result['metadata'],
+                    screenshot_path=screenshot if screenshot else None
+                )
+                combined_profiles.append(profile)
+
+            # Store profiles and proceed
+            st.session_state.extracted_profiles = combined_profiles
+            st.session_state.stage = 'processing'
             st.rerun()
 
 # Stage 2: Dashboard Configuration
@@ -2263,6 +2604,14 @@ def main():
     
     if st.session_state.stage == 'method_choice':
         render_method_choice()
+    elif st.session_state.stage == 'local_mode_selection':
+        render_local_mode_selection()
+    elif st.session_state.stage == 'folder_selection':
+        render_folder_selection()
+    elif st.session_state.stage == 'pbi_extraction':
+        render_pbi_extraction()
+    elif st.session_state.stage == 'screenshot_mapping':
+        render_screenshot_mapping()
     elif st.session_state.stage == 'dashboard_config':
         render_dashboard_config()
     elif st.session_state.stage == 'file_upload':
