@@ -555,12 +555,49 @@ def render_folder_selection():
     The tool will automatically discover all files and extract their metadata.
     """)
 
-    # Folder path input
-    folder_path = st.text_input(
-        "Enter folder path:",
-        value="C:\\Users\\YourName\\Documents\\PowerBI Files" if is_windows else "/Users/YourName/Documents/PowerBI Files",
-        help="Full path to the folder containing your .pbix/.pbit files"
-    )
+    # Folder path selection
+    st.write("**Select folder containing your .pbix/.pbit files:**")
+
+    col1, col2 = st.columns([3, 1])
+
+    with col1:
+        folder_path = st.text_input(
+            "Folder path:",
+            value=st.session_state.get('selected_folder_path',
+                   "C:\\Users\\YourName\\Documents\\PowerBI Files" if is_windows else "/Users/YourName/Documents/PowerBI Files"),
+            help="Full path to the folder containing your .pbix/.pbit files"
+        )
+
+    with col2:
+        st.write("")  # Spacing
+        if st.button("📁 Browse", help="Open folder browser dialog"):
+            try:
+                if is_windows:
+                    import tkinter as tk
+                    from tkinter import filedialog
+
+                    # Create a root window and hide it
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.wm_attributes('-topmost', 1)
+
+                    # Open folder dialog
+                    selected_folder = filedialog.askdirectory(
+                        title="Select folder containing Power BI files",
+                        initialdir=folder_path if os.path.exists(folder_path) else "C:\\"
+                    )
+
+                    if selected_folder:
+                        st.session_state.selected_folder_path = selected_folder
+                        st.rerun()
+
+                    root.destroy()
+                else:
+                    st.info("💡 Folder browser is only available on Windows. Please enter the path manually on Mac/Linux.")
+
+            except Exception as e:
+                st.error(f"Could not open folder browser: {str(e)}")
+                st.info("💡 Please enter the folder path manually in the text field above.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -570,14 +607,16 @@ def render_folder_selection():
 
     with col2:
         if st.button("Scan Folder", type="primary"):
-            if folder_path and os.path.exists(folder_path):
+            # Use the session state folder path if available
+            current_folder = st.session_state.get('selected_folder_path', folder_path)
+            if current_folder and os.path.exists(current_folder):
                 with st.spinner("Scanning folder for Power BI files..."):
                     # Discover files
-                    pbi_files = pbi_wrapper.discover_pbi_files(folder_path)
+                    pbi_files = pbi_wrapper.discover_pbi_files(current_folder)
 
                     if pbi_files:
                         st.session_state.discovered_files = pbi_files
-                        st.session_state.folder_path = folder_path
+                        st.session_state.folder_path = current_folder
                         st.session_state.pbi_wrapper = pbi_wrapper
                         st.session_state.stage = 'pbi_extraction'
                         st.rerun()
