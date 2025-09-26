@@ -1,0 +1,20 @@
+[theme]
+# Force light theme - no dark mode
+base = "light"
+primaryColor = "#0C62FB"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
+
+[server]
+# Disable theme selection
+enableStaticServing = false
+headless = true
+
+[browser]
+# Disable dark mode detection
+gatherUsageStats = false
+
+[global]
+# Disable usage stats and email collection
+showWarningOnDirectExecution = false

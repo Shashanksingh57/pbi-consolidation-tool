@@ -15,21 +15,51 @@ from datetime import datetime
 from pathlib import Path
 import time
 
-# Configure page
+# Import models
+from models import PageScreenshot
+
+# Configure page - Force light theme
 st.set_page_config(
     page_title="Power BI Dashboard Consolidation Tool",
-    page_icon="📊",
+    page_icon="🔷",  # Blue diamond for better contrast
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': None,
+        'Report a bug': None,
+        'About': None
+    }
 )
 
-# Load custom CSS
+# Load custom CSS - Force light theme throughout
 def load_custom_css():
     st.markdown("""
     <style>
+    /* Force light theme for the entire application */
+    .stApp {
+        background-color: #FFFFFF !important;
+        color: #262730 !important;
+    }
+
+    /* Main content area */
+    .main .block-container {
+        background-color: #FFFFFF !important;
+        color: #262730 !important;
+    }
+
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {
+        background-color: #F0F2F6 !important;
+    }
+
+    [data-testid="stSidebar"] > div {
+        background-color: #F0F2F6 !important;
+    }
+
+    /* Button styling - Primary blue theme */
     .stButton > button {
-        background-color: #0C62FB;
-        color: white;
+        background-color: #0C62FB !important;
+        color: white !important;
         border-radius: 5px;
         border: none;
         padding: 0.5rem 1rem;
@@ -37,56 +67,117 @@ def load_custom_css():
         transition: all 0.3s;
         width: 100%;
     }
-    
+
     .stButton > button:hover {
-        background-color: #0952D0;
+        background-color: #0952D0 !important;
         box-shadow: 0 5px 10px rgba(12, 98, 251, 0.3);
     }
-    
-    [data-testid="stSidebar"] {
-        background-color: #f0f2f6;
-    }
-    
+
+    /* Expander styling */
     .stExpander {
-        background-color: white;
+        background-color: white !important;
         border: 1px solid #e0e0e0;
         border-radius: 8px;
         margin-bottom: 1rem;
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
-    
+
+    /* Progress bar styling */
     .stProgress > div > div {
-        background-color: #0C62FB;
+        background-color: #0C62FB !important;
     }
-    
+
+    /* Custom analysis boxes */
     .detailed-analysis-box {
-        background-color: #f8f9fa;
+        background-color: #f8f9fa !important;
         border-left: 4px solid #0C62FB;
         padding: 1rem;
         border-radius: 4px;
         margin: 0.5rem 0;
+        color: #262730 !important;
     }
-    
+
+    /* Confidence score styling */
     .confidence-score {
         display: inline-block;
         padding: 0.2rem 0.5rem;
         border-radius: 4px;
         font-weight: bold;
     }
-    
+
     .confidence-high { background-color: #d4edda; color: #155724; }
     .confidence-medium { background-color: #fff3cd; color: #856404; }
     .confidence-low { background-color: #f8d7da; color: #721c24; }
-    
+
+    /* Visual element cards */
     .visual-element-card {
         border: 1px solid #dee2e6;
         border-radius: 8px;
         padding: 0.75rem;
         margin: 0.25rem 0;
-        background-color: #ffffff;
+        background-color: #ffffff !important;
+        color: #262730 !important;
     }
-    
-    /* Removed visibility hidden styles that might cause blank page */
+
+    /* Force light theme for all text elements */
+    .stMarkdown, .stText, .stWrite {
+        color: #262730 !important;
+    }
+
+    /* Headers styling */
+    h1, h2, h3, h4, h5, h6 {
+        color: #262730 !important;
+    }
+
+    /* Tabs styling */
+    .stTabs [data-baseweb="tab-list"] {
+        background-color: #F0F2F6 !important;
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        background-color: #F0F2F6 !important;
+        color: #262730 !important;
+    }
+
+    .stTabs [aria-selected="true"] {
+        background-color: #0C62FB !important;
+        color: white !important;
+    }
+
+    /* File uploader styling */
+    .stFileUploader > div {
+        background-color: #F0F2F6 !important;
+        border: 2px dashed #0C62FB !important;
+    }
+
+    /* Input fields */
+    .stTextInput > div > div > input,
+    .stNumberInput > div > div > input,
+    .stSelectbox > div > div {
+        background-color: white !important;
+        color: #262730 !important;
+        border: 1px solid #e0e0e0 !important;
+    }
+
+    /* Disable any dark theme CSS */
+    @media (prefers-color-scheme: dark) {
+        .stApp {
+            background-color: #FFFFFF !important;
+            color: #262730 !important;
+        }
+    }
+
+    /* Only apply white text to elements inside the blue header div */
+    /* This targets the specific markdown container that contains our blue header */
+    .stMarkdown div[style*="background: linear-gradient"] h1,
+    .stMarkdown div[style*="background: linear-gradient"] p {
+        color: white !important;
+    }
+
+    /* Remove the three-line menu and settings */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -259,6 +350,23 @@ def init_session_state():
     if 'selected_reports' not in st.session_state:
         st.session_state.selected_reports = []
 
+    # Initialize visual analyzer for screenshot processing
+    if 'visual_analyzer' not in st.session_state:
+        try:
+            from openai import OpenAI
+            from analyzers.visual_analyzer import VisualAnalyzer
+            import os
+
+            api_key = os.getenv("OPENAI_API_KEY")
+            if api_key:
+                openai_client = OpenAI(api_key=api_key)
+                st.session_state.visual_analyzer = VisualAnalyzer(openai_client)
+            else:
+                st.session_state.visual_analyzer = None
+                # Don't show error here, we'll handle it gracefully during processing
+        except Exception:
+            st.session_state.visual_analyzer = None
+
 # Header
 def render_header():
     st.markdown("""
@@ -267,10 +375,10 @@ def render_header():
                 border-radius: 10px; 
                 margin-bottom: 2rem;
                 box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);'>
-        <h1 style='color: white; margin: 0; font-size: 2.5rem;'>
+        <h1 style='color: white !important; margin: 0; font-size: 2.5rem;'>
             📊 Power BI Dashboard Consolidation Tool
         </h1>
-        <p style='color: white; opacity: 0.95; margin-top: 0.5rem; font-size: 1.1rem;'>
+        <p style='color: white !important; opacity: 0.95; margin-top: 0.5rem; font-size: 1.1rem;'>
             Identify and consolidate duplicate dashboards using AI-powered batch analysis
         </p>
     </div>
@@ -400,13 +508,13 @@ def render_method_choice():
     col1_btn, col2_btn = st.columns(2)
 
     with col1_btn:
-        if st.button("🖥️ Start Local Analysis", type="primary", key="local_analysis", use_container_width=True):
+        if st.button("🖥️ Start Local Analysis", type="primary", key="local_analysis", width='stretch'):
             st.session_state.analysis_method = "Local Analysis"
             st.session_state.stage = 'local_mode_selection'
             st.rerun()
 
     with col2_btn:
-        if st.button("☁️ Start Power BI Service", type="primary", key="rest_api", use_container_width=True):
+        if st.button("☁️ Start Power BI Service", type="primary", key="rest_api", width='stretch'):
             st.session_state.analysis_method = "REST API Analysis"
             st.session_state.stage = 'api_credentials'
             st.rerun()
@@ -496,7 +604,7 @@ def render_local_mode_selection():
     col1_btn, col2_btn = st.columns(2)
 
     with col1_btn:
-        if st.button("📤 Use Manual Upload", type="primary", key="manual_mode", use_container_width=True):
+        if st.button("📤 Use Manual Upload", type="primary", key="manual_mode", width='stretch'):
             st.session_state.analysis_sub_method = "Manual Upload"
             st.session_state.stage = 'dashboard_config'
             st.rerun()
@@ -506,7 +614,7 @@ def render_local_mode_selection():
             "🔧 Use pbi-tools" if is_windows else "🔧 Use pbi-tools (Demo)",
             type="primary" if is_windows else "secondary",
             key="pbi_tools_mode",
-            use_container_width=True
+            width='stretch'
         ):
             st.session_state.analysis_sub_method = "pbi-tools"
             st.session_state.stage = 'folder_selection'
@@ -657,7 +765,7 @@ def render_pbi_extraction():
     # Display discovered files
     file_df = pd.DataFrame(pbi_files)
     file_df['size_mb'] = file_df['size_mb'].round(2)
-    st.dataframe(file_df[['name', 'type', 'size_mb', 'relative_path']], use_container_width=True)
+    st.dataframe(file_df[['name', 'type', 'size_mb', 'relative_path']], width='stretch')
 
     if st.button("Extract Metadata from All Files", type="primary"):
         extraction_results = []
@@ -685,9 +793,9 @@ def render_pbi_extraction():
         st.session_state.stage = 'folder_selection'
         st.rerun()
 
-# Stage 2C: Screenshot Mapping
+# Stage 2C: Per-Page Screenshot Mapping
 def render_screenshot_mapping():
-    st.header("📸 Upload Dashboard Screenshots")
+    st.header("📸 Upload Page Screenshots")
 
     if 'extraction_results' not in st.session_state:
         st.error("No extraction results found.")
@@ -698,81 +806,227 @@ def render_screenshot_mapping():
 
     extraction_results = st.session_state.extraction_results
     st.write(f"""
-    **Metadata extracted successfully!** Now upload screenshots for each dashboard to enable visual analysis.
-    Screenshots help identify visual elements that cannot be extracted from the .pbix files.
+    **Metadata extracted successfully!** Now upload screenshots for each page within each dashboard.
+    This enables detailed visual analysis and better duplicate detection at the page level.
     """)
+
+    # Calculate total pages across all dashboards
+    total_pages = 0
+    for result in extraction_results:
+        pages = result['metadata'].get('pages', [])
+        total_pages += len(pages) if pages else 1  # At least 1 page if no pages detected
+
+    st.info(f"📊 **Total pages found**: {total_pages} across {len(extraction_results)} dashboards")
+
+    # Initialize screenshot uploads storage
+    if 'page_screenshot_uploads' not in st.session_state:
+        st.session_state.page_screenshot_uploads = {}
+
+    screenshot_uploads = st.session_state.page_screenshot_uploads
 
     # Create tabs for each dashboard
     dashboard_names = [result['file_info']['name'] for result in extraction_results]
     tabs = st.tabs(dashboard_names)
 
-    screenshot_uploads = {}
+    uploaded_pages = 0
 
     for tab, result in zip(tabs, extraction_results):
         with tab:
             file_info = result['file_info']
             metadata = result['metadata']
+            dashboard_name = file_info['name']
 
-            col1, col2 = st.columns([2, 1])
+            # Show extraction status
+            if result['error']:
+                st.error(f"⚠️ Extraction had issues: {result['error']}")
+                continue
 
+            st.success("✅ Metadata extracted successfully")
+
+            # Show dashboard summary
+            col1, col2, col3 = st.columns(3)
             with col1:
-                st.subheader(f"📊 {file_info['name']}")
-
-                # Show extraction status
-                if result['error']:
-                    st.error(f"⚠️ Extraction had issues: {result['error']}")
-                else:
-                    st.success("✅ Metadata extracted successfully")
-
-                # Show metadata summary
-                if metadata.get('measures'):
-                    st.metric("Measures", len(metadata['measures']))
-                if metadata.get('tables'):
-                    st.metric("Tables", len(metadata['tables']))
-                if metadata.get('pages'):
-                    st.metric("Pages", len(metadata['pages']))
-
+                st.metric("Measures", len(metadata.get('measures', [])))
             with col2:
-                st.write("**Upload Screenshot:**")
-                uploaded_file = st.file_uploader(
-                    f"Screenshot for {file_info['name']}",
-                    type=['png', 'jpg', 'jpeg'],
-                    key=f"screenshot_{file_info['name']}"
-                )
+                st.metric("Tables", len(metadata.get('tables', [])))
+            with col3:
+                st.metric("Pages", len(metadata.get('pages', [])))
 
-                if uploaded_file:
-                    screenshot_uploads[file_info['name']] = uploaded_file
-                    st.image(uploaded_file, width=200)
+            # Get pages for this dashboard
+            pages = metadata.get('pages', [])
 
-    # Show progress
-    uploaded_count = len(screenshot_uploads)
-    total_count = len(extraction_results)
-    st.progress(uploaded_count / total_count)
-    st.write(f"Screenshots uploaded: {uploaded_count}/{total_count}")
+            if not pages:
+                # If no pages detected, create a default page
+                pages = [{"name": "Main Page", "visuals": [], "filters": []}]
+                st.warning("⚠️ No pages detected in metadata. Assuming single page dashboard.")
+
+            st.write(f"**📄 Upload screenshots for each page in {dashboard_name}:**")
+
+            # Create expandable sections for each page
+            for page_idx, page in enumerate(pages):
+                page_name = page.get('name', f'Page {page_idx + 1}')
+                page_key = f"{dashboard_name}_{page_name}"
+
+                with st.expander(f"📄 {page_name} ({len(page.get('visuals', []))} visuals)", expanded=True):
+
+                    # Show page details
+                    if page.get('visuals'):
+                        visual_summary = {}
+                        for visual in page['visuals']:
+                            vtype = visual.get('type', 'unknown')
+                            count = visual.get('count', 1)
+                            visual_summary[vtype] = visual_summary.get(vtype, 0) + count
+
+                        st.write("**Visual types on this page:**")
+                        visual_cols = st.columns(min(len(visual_summary), 4))
+                        for idx, (vtype, count) in enumerate(visual_summary.items()):
+                            with visual_cols[idx % len(visual_cols)]:
+                                st.metric(vtype.title(), count)
+
+                    # Screenshot uploader for this page
+                    uploaded_file = st.file_uploader(
+                        f"Screenshot for {page_name}",
+                        type=['png', 'jpg', 'jpeg'],
+                        key=f"page_screenshot_{page_key}",
+                        help=f"Upload a screenshot of the '{page_name}' page from {dashboard_name}"
+                    )
+
+                    if uploaded_file:
+                        screenshot_uploads[page_key] = {
+                            'file': uploaded_file,
+                            'dashboard': dashboard_name,
+                            'page': page_name,
+                            'page_metadata': page
+                        }
+
+                        # Display thumbnail
+                        col1, col2 = st.columns([1, 2])
+                        with col1:
+                            st.image(uploaded_file, width=150, caption=f"{page_name}")
+                        with col2:
+                            st.success(f"✅ Screenshot uploaded for {page_name}")
+                            if st.button(f"🗑️ Remove", key=f"remove_{page_key}"):
+                                del screenshot_uploads[page_key]
+                                st.rerun()
+
+                    # Count uploaded pages
+                    if page_key in screenshot_uploads:
+                        uploaded_pages += 1
+
+    # Update session state
+    st.session_state.page_screenshot_uploads = screenshot_uploads
+
+    # Show overall progress
+    st.markdown("---")
+    progress_percent = uploaded_pages / total_pages if total_pages > 0 else 0
+    st.progress(progress_percent)
+    st.write(f"**Progress**: {uploaded_pages}/{total_pages} pages uploaded ({progress_percent:.1%} complete)")
+
+    # Navigation buttons
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        if st.button("← Back to Extraction", key="back_to_extraction_1"):
+            st.session_state.stage = 'pbi_extraction'
+            st.rerun()
+
+    with col2:
+        # Show option to skip remaining pages
+        if uploaded_pages < total_pages:
+            if st.button("⏭️ Skip Remaining Pages", help="Proceed with only uploaded pages"):
+                st.session_state.stage = 'processing'
+                st.rerun()
+
+    with col3:
+        # Only enable if at least some pages are uploaded
+        can_continue = uploaded_pages > 0
+        if st.button(
+            "Continue to Analysis →",
+            type="primary",
+            disabled=not can_continue,
+            help="At least one page screenshot is required" if not can_continue else "Proceed with analysis"
+        ):
+            if can_continue:
+                st.session_state.stage = 'processing'
+                st.rerun()
 
     col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("← Back to Extraction"):
+        if st.button("← Back to Extraction", key="back_to_extraction_2"):
             st.session_state.stage = 'pbi_extraction'
             st.rerun()
 
     with col2:
         if st.button("Continue to Analysis →", type="primary"):
-            # Combine extraction results with screenshots
+            # Show processing status
+            st.info("🔄 Processing screenshots and creating dashboard profiles...")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            # Combine extraction results with page-specific screenshots
             combined_profiles = []
             pbi_wrapper = st.session_state.pbi_wrapper
 
-            for result in extraction_results:
+            for idx, result in enumerate(extraction_results):
                 file_name = result['file_info']['name']
-                screenshot = screenshot_uploads.get(file_name)
+                metadata = result['metadata']
+
+                status_text.text(f"Processing dashboard {idx+1}/{len(extraction_results)}: {file_name}")
+                progress_bar.progress((idx / len(extraction_results)) * 0.5)
+
+                # Create PageScreenshot objects with screenshot data
+                page_screenshot_objects = []
+                pages_data = metadata.get('pages', [])
+
+                if pages_data:
+                    for page_idx, page in enumerate(pages_data):
+                        page_name = page.get('name', f'Page {page_idx + 1}')
+                        page_key = f"{file_name}_{page_name}"
+
+                        # Check if we have a screenshot for this page
+                        if page_key in screenshot_uploads:
+                            screenshot_file = screenshot_uploads[page_key]
+
+                            # Create PageScreenshot object with binary data
+                            page_screenshot = PageScreenshot(
+                                page_name=page_name,
+                                page_index=page_idx,
+                                screenshot_filename=screenshot_file.name if hasattr(screenshot_file, 'name') else f"{page_name}_screenshot",
+                                screenshot_data=screenshot_file.read() if hasattr(screenshot_file, 'read') else screenshot_file.getvalue(),
+                                upload_timestamp=datetime.now()
+                            )
+                            page_screenshot_objects.append(page_screenshot)
+
+                # Analyze screenshots if we have visual analyzer available
+                if page_screenshot_objects and 'visual_analyzer' in st.session_state:
+                    status_text.text(f"Analyzing visuals for {file_name}...")
+                    try:
+                        import asyncio
+                        visual_analyzer = st.session_state.visual_analyzer
+
+                        # Run visual analysis
+                        analyzed_screenshots = asyncio.run(
+                            visual_analyzer.analyze_page_screenshots(page_screenshot_objects)
+                        )
+                        page_screenshot_objects = analyzed_screenshots
+                    except Exception as e:
+                        st.warning(f"Visual analysis failed for {file_name}: {str(e)}")
 
                 # Convert to dashboard profile
                 profile = pbi_wrapper.convert_to_dashboard_profile(
-                    result['metadata'],
-                    screenshot_path=screenshot if screenshot else None
+                    metadata,
+                    page_screenshots={}  # We'll set this properly in the profile
                 )
+
+                # Manually add the page screenshots to the profile
+                profile.page_screenshots = page_screenshot_objects
+                profile.total_pages = len(pages_data) if pages_data else 1
+
                 combined_profiles.append(profile)
+
+            progress_bar.progress(1.0)
+            status_text.text("✅ All dashboards processed successfully!")
 
             # Store profiles and proceed
             st.session_state.extracted_profiles = combined_profiles
@@ -1248,7 +1502,7 @@ def render_review():
                             import base64
                             try:
                                 img_data = base64.b64decode(first_view['data'])
-                                st.image(img_data, caption=f"Preview - {first_view.get('name', 'View 1')}", use_container_width=True)
+                                st.image(img_data, caption=f"Preview - {first_view.get('name', 'View 1')}", width='stretch')
                             except Exception as e:
                                 st.info("Screenshot preview not available")
             
@@ -1982,7 +2236,7 @@ def render_dashboard_summary(dashboard_data, side="left"):
                 import base64
                 try:
                     img_data = base64.b64decode(first_view['data'])
-                    st.image(img_data, caption="Dashboard Preview", use_container_width=True)
+                    st.image(img_data, caption="Dashboard Preview", width='stretch')
                 except Exception:
                     pass
 
@@ -2063,7 +2317,7 @@ def render_detailed_dashboard_analysis(dashboard_id: str):
                             color_discrete_sequence=['#0C62FB']
                         )
                         fig.update_layout(height=300)
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
                 
                 # Detailed element list (expandable)
                 with st.expander("🔍 Raw Visual Elements (GPT-4 Vision Analysis)", expanded=False):
@@ -2112,7 +2366,7 @@ def render_detailed_dashboard_analysis(dashboard_id: str):
                     
                     if table_data:
                         df_tables = pd.DataFrame(table_data)
-                        st.dataframe(df_tables, use_container_width=True)
+                        st.dataframe(df_tables, width='stretch')
                 
                 # Relationships analysis
                 relationships = data_model.get('relationships', [])
@@ -2233,7 +2487,7 @@ def render_results():
                         display_name = profile.get('user_provided_name', profile.get('dashboard_name', 'Unknown Dashboard'))
                         
                         # Create a button-like expander for each dashboard
-                        if st.button(f"📊 {display_name}", key=f"dashboard_detail_{i}", use_container_width=True):
+                        if st.button(f"📊 {display_name}", key=f"dashboard_detail_{i}", width='stretch'):
                             st.session_state[f'show_details_{profile["dashboard_id"]}'] = not st.session_state.get(f'show_details_{profile["dashboard_id"]}', False)
                         
                         # Show basic info
@@ -2317,7 +2571,7 @@ def render_results():
                         title="Click on a cell to see detailed breakdown"
                     )
                     fig.update_layout(height=500)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     
                     # Interactive dashboard pair selection
                     st.subheader("🔬 Detailed Similarity Comparison")
