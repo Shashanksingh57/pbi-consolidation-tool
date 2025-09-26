@@ -287,13 +287,103 @@ class VisualAnalyzer:
         Analyze multiple dashboard pages
         """
         all_elements = []
-        
+
         for i, image in enumerate(images):
             page_name = f"{dashboard_name}_page_{i+1}"
             page_elements = self.analyze_dashboard_screenshot(image, page_name)
             all_elements.extend(page_elements)
-        
+
         return all_elements
+
+    async def analyze_page_screenshots(self, page_screenshots: List['PageScreenshot']) -> List['PageScreenshot']:
+        """
+        Analyze each page screenshot and store results in the PageScreenshot objects
+
+        Args:
+            page_screenshots: List of PageScreenshot objects with screenshot data
+
+        Returns:
+            Updated list of PageScreenshot objects with visual_analysis_results populated
+        """
+        from models import PageScreenshot  # Import here to avoid circular imports
+
+        updated_screenshots = []
+
+        for page_screenshot in page_screenshots:
+            try:
+                # Skip if no screenshot data
+                if not page_screenshot.screenshot_data:
+                    logger.warning(f"No screenshot data for page: {page_screenshot.page_name}")
+                    updated_screenshots.append(page_screenshot)
+                    continue
+
+                # Convert screenshot data to PIL Image
+                image = Image.open(io.BytesIO(page_screenshot.screenshot_data))
+
+                # Analyze the screenshot
+                visual_elements = await self.analyze_dashboard_screenshot(image, page_screenshot.page_name)
+
+                # Convert to serializable format
+                analysis_results = {
+                    "visual_elements": [
+                        {
+                            "visual_type": elem.visual_type,
+                            "title": elem.title,
+                            "position": elem.position,
+                            "data_fields": elem.data_fields,
+                            "chart_properties": elem.chart_properties
+                        }
+                        for elem in visual_elements
+                    ],
+                    "analysis_timestamp": page_screenshot.upload_timestamp.isoformat(),
+                    "elements_count": len(visual_elements),
+                    "page_complexity_score": self._calculate_page_complexity(visual_elements)
+                }
+
+                # Create updated PageScreenshot with analysis results
+                updated_screenshot = PageScreenshot(
+                    page_name=page_screenshot.page_name,
+                    page_index=page_screenshot.page_index,
+                    screenshot_filename=page_screenshot.screenshot_filename,
+                    screenshot_data=page_screenshot.screenshot_data,
+                    upload_timestamp=page_screenshot.upload_timestamp,
+                    visual_analysis_results=analysis_results
+                )
+
+                updated_screenshots.append(updated_screenshot)
+                logger.info(f"Successfully analyzed page: {page_screenshot.page_name} - {len(visual_elements)} elements")
+
+            except Exception as e:
+                logger.error(f"Error analyzing page screenshot {page_screenshot.page_name}: {str(e)}")
+                # Add without analysis results on error
+                updated_screenshots.append(page_screenshot)
+                continue
+
+        return updated_screenshots
+
+    def _calculate_page_complexity(self, visual_elements: List[VisualElement]) -> float:
+        """
+        Calculate a complexity score for a page based on its visual elements
+
+        Returns:
+            Float between 1.0 and 10.0 indicating page complexity
+        """
+        if not visual_elements:
+            return 1.0
+
+        # Base score from element count
+        element_count_score = min(len(visual_elements) / 2.0, 5.0)
+
+        # Additional score for visual type diversity
+        unique_types = len(set(elem.visual_type for elem in visual_elements))
+        diversity_score = min(unique_types / 3.0, 3.0)
+
+        # Score for elements with many data fields (complex charts)
+        complex_elements = sum(1 for elem in visual_elements if len(elem.data_fields) > 3)
+        complexity_bonus = min(complex_elements * 0.5, 2.0)
+
+        total_score = element_count_score + diversity_score + complexity_bonus
+        return min(max(total_score, 1.0), 10.0)
     
     def get_visual_summary(self, visual_elements: List[VisualElement]) -> Dict[str, Any]:
         """

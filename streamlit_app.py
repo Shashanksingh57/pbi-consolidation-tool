@@ -646,13 +646,30 @@ def render_folder_selection():
         # Check if pbi-tools is installed
         if not pbi_wrapper.check_installation():
             st.error("❌ pbi-tools is not installed or not in PATH")
-            st.info("""
-            **To install pbi-tools:**
-            1. Download from: https://github.com/pbi-tools/pbi-tools/releases
-            2. Extract the ZIP file
-            3. Add the folder to your system PATH
-            4. Restart this application
-            """)
+
+            # Show detailed installation instructions
+            with st.expander("📋 Installation Instructions", expanded=True):
+                st.text(pbi_wrapper.get_installation_instructions())
+
+            # Add troubleshooting section
+            with st.expander("🔧 Troubleshooting"):
+                st.markdown("""
+                **Common Issues:**
+                - Make sure you're running on Windows (pbi-tools is Windows-only)
+                - If using NPM, make sure Node.js is installed first
+                - Try restarting your command prompt after installation
+                - Check if pbi-tools.exe exists in your PATH
+
+                **Manual Installation:**
+                - Download the latest release from GitHub
+                - Extract to a folder like C:\\pbi-tools\\
+                - Add that folder to your Windows PATH environment variable
+                - Open a new command prompt and type `pbi-tools version`
+                """)
+
+            if st.button("🔄 Retry Detection"):
+                st.rerun()
+
             if st.button("← Back to Method Selection"):
                 st.session_state.stage = 'method_choice'
                 st.rerun()

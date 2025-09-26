@@ -71,28 +71,40 @@ class AnalysisDetails(BaseModel):
     data_model_metrics: Dict[str, Any] = Field(default_factory=dict, description="Data model analysis metrics")
     processing_metadata: Dict[str, Any] = Field(default_factory=dict, description="Processing timestamps and metadata")
 
+class PageScreenshot(BaseModel):
+    """Represents a screenshot of a specific dashboard page"""
+    page_name: str = Field(..., description="Name of the dashboard page")
+    page_index: int = Field(..., description="Index of the page in the dashboard")
+    screenshot_filename: Optional[str] = Field(None, description="Screenshot file name")
+    screenshot_data: Optional[bytes] = Field(None, description="Screenshot binary data")
+    upload_timestamp: datetime = Field(default_factory=datetime.now, description="When screenshot was uploaded")
+    visual_analysis_results: Optional[Dict[str, Any]] = Field(None, description="GPT-4 Vision analysis results for this page")
+
 class DashboardProfile(BaseModel):
     """Complete profile of a Power BI dashboard with enhanced transparency"""
     dashboard_id: str = Field(..., description="Unique identifier for dashboard")
     dashboard_name: str = Field(..., description="Human-readable dashboard name")
     user_provided_name: Optional[str] = Field(None, description="User's custom name for this dashboard")
     created_at: datetime = Field(default_factory=datetime.now, description="Profile creation timestamp")
-    
+
     # Visual elements (enhanced for transparency)
     visual_elements: List[VisualElement] = Field(default_factory=list)
     kpi_cards: List[KPICard] = Field(default_factory=list)
     filters: List[FilterElement] = Field(default_factory=list)
-    
+
     # Data model elements
     measures: List[DAXMeasure] = Field(default_factory=list)
     tables: List[DataTable] = Field(default_factory=list)
     relationships: List[Relationship] = Field(default_factory=list)
     data_sources: List[DataSource] = Field(default_factory=list)
-    
+
+    # Page-specific screenshots and analysis
+    page_screenshots: List[PageScreenshot] = Field(default_factory=list, description="Screenshots for each dashboard page")
+
     # Computed properties
     total_pages: int = Field(default=1, description="Number of dashboard pages")
     complexity_score: Optional[float] = Field(None, description="Computed complexity score")
-    
+
     # Enhanced transparency features
     analysis_details: AnalysisDetails = Field(default_factory=AnalysisDetails, description="Detailed analysis information")
     extraction_confidence: Dict[str, float] = Field(default_factory=dict, description="Confidence scores for different extraction phases")

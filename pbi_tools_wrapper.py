@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import tempfile
 import shutil
-from models import DashboardProfile, DAXMeasure, DataTable, Relationship
+from models import DashboardProfile, DAXMeasure, DataTable, Relationship, PageScreenshot
 
 class PBIToolsWrapper:
     """Wrapper for pbi-tools CLI operations"""
@@ -29,30 +29,107 @@ class PBIToolsWrapper:
 
     def check_installation(self) -> bool:
         """Check if pbi-tools is installed and accessible"""
-        # Try multiple possible locations and commands
+        # Try multiple possible locations and commands for Windows
         possible_paths = [
             self.pbi_tools_path,
+            "pbi-tools",
             "pbi-tools.exe",
+            # Common installation paths
+            os.path.expanduser("~\\AppData\\Local\\pbi-tools\\pbi-tools.exe"),
+            os.path.expanduser("~\\AppData\\Local\\pbi-tools\\pbi-tools"),
             "C:\\pbi-tools\\pbi-tools.exe",
-            "C:\\pbi-tools\\pbi-tools"
+            "C:\\pbi-tools\\pbi-tools",
+            "C:\\Program Files\\pbi-tools\\pbi-tools.exe",
+            "C:\\Program Files (x86)\\pbi-tools\\pbi-tools.exe",
+            # NPM global install locations
+            os.path.expanduser("~\\AppData\\Roaming\\npm\\pbi-tools.cmd"),
+            os.path.expanduser("~\\AppData\\Roaming\\npm\\node_modules\\pbi-tools\\bin\\pbi-tools.exe"),
         ]
+
+        # Also check if it's available via PATH
+        import shutil as sh
+        which_result = sh.which("pbi-tools") or sh.which("pbi-tools.exe")
+        if which_result and which_result not in possible_paths:
+            possible_paths.insert(1, which_result)
 
         for path in possible_paths:
             try:
+                # Skip if path doesn't exist as a file
+                if not os.path.exists(path) and not sh.which(path):
+                    continue
+
+                # Try to run version command
                 result = subprocess.run(
                     [path, "version"],
                     capture_output=True,
                     text=True,
-                    timeout=5,
-                    shell=True  # Use shell to inherit PATH
+                    timeout=10,
+                    shell=self.is_windows  # Use shell on Windows for .cmd files
                 )
-                if result.returncode == 0:
+
+                if result.returncode == 0 and "pbi-tools" in result.stdout.lower():
                     self.pbi_tools_path = path  # Update to working path
+                    print(f"Found pbi-tools at: {path}")
                     return True
-            except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
+
+            except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+                # For debugging
+                print(f"Failed to check {path}: {e}")
                 continue
 
+        # Additional check for NPM installation
+        try:
+            npm_result = subprocess.run(
+                ["npm", "list", "-g", "pbi-tools"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                shell=self.is_windows
+            )
+            if npm_result.returncode == 0 and "pbi-tools" in npm_result.stdout:
+                # Try to use npx to run pbi-tools
+                npx_result = subprocess.run(
+                    ["npx", "pbi-tools", "version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    shell=self.is_windows
+                )
+                if npx_result.returncode == 0:
+                    self.pbi_tools_path = "npx pbi-tools"
+                    print("Found pbi-tools via NPX")
+                    return True
+        except:
+            pass
+
         return False
+
+    def get_installation_instructions(self) -> str:
+        """Get installation instructions for pbi-tools"""
+        if self.is_windows:
+            return """
+pbi-tools is not installed or not found in PATH.
+
+Installation options for Windows:
+
+1. Via NPM (Recommended):
+   npm install -g pbi-tools
+
+2. Via GitHub Release:
+   - Download from: https://github.com/pbi-tools/pbi-tools/releases
+   - Extract to C:\\pbi-tools\\
+   - Add C:\\pbi-tools\\ to your PATH environment variable
+
+3. Via Chocolatey:
+   choco install pbi-tools
+
+After installation, restart your command prompt and try again.
+"""
+        else:
+            return """
+pbi-tools only runs on Windows systems.
+For Mac/Linux, please use the Power BI Service API mode instead.
+"""
 
     def discover_pbi_files(self, folder_path: str) -> List[Dict[str, str]]:
         """
@@ -105,11 +182,18 @@ class PBIToolsWrapper:
             # Create temp directory for extraction
             with tempfile.TemporaryDirectory() as temp_dir:
                 # Extract the .pbix file
+                # Handle different command formats (direct executable vs npx)
+                if self.pbi_tools_path.startswith("npx"):
+                    cmd = ["npx", "pbi-tools", "extract", pbix_path, "-extractFolder", temp_dir]
+                else:
+                    cmd = [self.pbi_tools_path, "extract", pbix_path, "-extractFolder", temp_dir]
+
                 extract_result = subprocess.run(
-                    [self.pbi_tools_path, "extract", pbix_path, "-extractFolder", temp_dir],
+                    cmd,
                     capture_output=True,
                     text=True,
-                    timeout=60
+                    timeout=60,
+                    shell=self.is_windows
                 )
 
                 if extract_result.returncode != 0:
@@ -247,19 +331,20 @@ class PBIToolsWrapper:
                 "file_info": file_info,
                 "metadata": metadata,
                 "error": error,
-                "requires_screenshot": True  # Flag for UI to collect screenshots
+                "requires_screenshots": True,  # Flag for UI to collect screenshots
+                "pages_requiring_screenshots": metadata.get("pages", [])  # List of pages needing screenshots
             })
 
         return results
 
     def convert_to_dashboard_profile(self, extracted_data: Dict,
-                                    screenshot_path: Optional[str] = None) -> DashboardProfile:
+                                    page_screenshots: Optional[Dict[str, str]] = None) -> DashboardProfile:
         """
         Convert extracted pbi-tools data to DashboardProfile format
 
         Args:
             extracted_data: Metadata extracted from PBI file
-            screenshot_path: Optional path to dashboard screenshot
+            page_screenshots: Optional dictionary mapping page names to screenshot paths
 
         Returns:
             DashboardProfile instance
@@ -304,17 +389,35 @@ class PBIToolsWrapper:
             for visual in page.get("visuals", []):
                 visual_elements.extend([visual["type"]] * visual["count"])
 
+        # Create page screenshots from provided mapping
+        page_screenshot_objects = []
+        if page_screenshots:
+            pages_data = extracted_data.get("pages", [])
+            for idx, page in enumerate(pages_data):
+                page_name = page.get("name", f"Page {idx + 1}")
+                if page_name in page_screenshots:
+                    screenshot_path = page_screenshots[page_name]
+                    page_screenshot_objects.append(
+                        PageScreenshot(
+                            page_name=page_name,
+                            page_index=idx,
+                            screenshot_filename=screenshot_path if screenshot_path else None
+                        )
+                    )
+
         return DashboardProfile(
             dashboard_id=extracted_data["file_name"],
             dashboard_name=extracted_data["file_name"],
             measures=measures,
             tables=tables,
             relationships=relationships,
+            page_screenshots=page_screenshot_objects,
+            total_pages=len(extracted_data.get("pages", [])),
             processing_metadata={
                 "extraction_method": "pbi-tools",
                 "pages": extracted_data.get("pages", []),
                 "data_sources": extracted_data.get("data_sources", []),
-                "screenshot_path": screenshot_path
+                "page_screenshots_provided": len(page_screenshot_objects)
             }
         )
 
