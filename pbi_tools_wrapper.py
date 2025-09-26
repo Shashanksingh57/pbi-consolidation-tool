@@ -29,16 +29,30 @@ class PBIToolsWrapper:
 
     def check_installation(self) -> bool:
         """Check if pbi-tools is installed and accessible"""
-        try:
-            result = subprocess.run(
-                [self.pbi_tools_path, "version"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            return result.returncode == 0
-        except (subprocess.SubprocessError, FileNotFoundError):
-            return False
+        # Try multiple possible locations and commands
+        possible_paths = [
+            self.pbi_tools_path,
+            "pbi-tools.exe",
+            "C:\\pbi-tools\\pbi-tools.exe",
+            "C:\\pbi-tools\\pbi-tools"
+        ]
+
+        for path in possible_paths:
+            try:
+                result = subprocess.run(
+                    [path, "version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    shell=True  # Use shell to inherit PATH
+                )
+                if result.returncode == 0:
+                    self.pbi_tools_path = path  # Update to working path
+                    return True
+            except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+
+        return False
 
     def discover_pbi_files(self, folder_path: str) -> List[Dict[str, str]]:
         """
